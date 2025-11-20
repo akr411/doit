@@ -174,9 +174,9 @@ Large todo lists are automatically paginated:
 ## Technologies used
 
 - **Go 1.15.4**
-- **Bubbletea**: Elm-inspired TUI framework
-- **Lipgloss**: Style library for beautiful terminal output
-- **BBolt**: Embedded key-value database for persistence
+- **[Bubbletea](https://github.com/charmbracelet/bubbletea)**: Elm-inspired TUI framework
+- **[Lipgloss](https://github.com/charmbracelet/lipgloss)**: Style library for beautiful terminal output
+- **[BBolt](https://github.com/etcd-io/bbolt)**: Embedded key-value database for persistence
 
 ## License
 
