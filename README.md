@@ -1,7 +1,6 @@
 # doit
 
-A feature-rich terminal-based todo application built with Go and
-Bubbletea framework.
+A simple terminal-based todo application with deadlines and streak tracking.
 
 ## Preview
 
@@ -9,14 +8,12 @@ Bubbletea framework.
 
 ## Features
 
-- **Interactive TUI**: Beautiful terminal user interface powered by Bubbletea
-- **Flexible Input**: Add todos via command-line arguments or interactive forms
-- **Smart Sorting**: Automatic sorting by deadline with separate sections for
+- Add todos via command-line arguments or interactive forms
+- Automatic sorting by deadline with separate sections for
   different priorities
-- **Streak Tracking**: Track your productivity with daily completion streaks
-- **Persistent Storage**: Usees BBolt embedded database for reliable data storage
-- **Deadline Management**: Visual indicators for overdue and upcoming deadlines
-- **Colorful Interface**: Aesthetic and intuitive color-coded UI
+- Track your productivity with daily completion streaks
+- Uses for reliable data storage
+- Visual indicators for overdue and upcoming deadlines
 
 ## Installation
 
@@ -81,7 +78,7 @@ Navigate through fields using:
 
 ### List View
 
-View all todos in a beautiful list:
+View all todos in a list:
 
 ```bash
 doit -list

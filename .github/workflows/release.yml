@@ -3,7 +3,7 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
 
 permissions:
   contents: write
@@ -19,7 +19,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.23'
+          go-version: "1.24.5"
 
       - name: Get dependencies
         run: go mod download
@@ -35,7 +35,7 @@ jobs:
           # macOS AMD64
           GOOS=darwin GOARCH=amd64 go build -o doit-macos-amd64 cmd/main.go
 
-          # macOS ARM64 (Apple Silicon)
+          # macOS ARM64
           GOOS=darwin GOARCH=arm64 go build -o doit-macos-arm64 cmd/main.go
 
           # Windows AMD64
