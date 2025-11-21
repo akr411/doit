@@ -1,0 +1,59 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Get dependencies
+        run: go mod download
+
+      - name: Build binaries
+        run: |
+          # Linux AMD64
+          GOOS=linux GOARCH=amd64 go build -o doit-linux-amd64 cmd/main.go
+
+          # Linux ARM64
+          GOOS=linux GOARCH=arm64 go build -o doit-linux-arm64 cmd/main.go
+
+          # macOS AMD64
+          GOOS=darwin GOARCH=amd64 go build -o doit-macos-amd64 cmd/main.go
+
+          # macOS ARM64 (Apple Silicon)
+          GOOS=darwin GOARCH=arm64 go build -o doit-macos-arm64 cmd/main.go
+
+          # Windows AMD64
+          GOOS=windows GOARCH=amd64 go build -o doit-windows-amd64.exe cmd/main.go
+
+          # Windows ARM64
+          GOOS=windows GOARCH=arm64 go build -o doit-windows-arm64.exe cmd/main.go
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            doit-linux-amd64
+            doit-linux-arm64
+            doit-macos-amd64
+            doit-macos-arm64
+            doit-windows-amd64.exe
+            doit-windows-arm64.exe
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
