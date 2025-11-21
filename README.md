@@ -19,7 +19,7 @@ A simple terminal-based todo application with deadlines and streak tracking.
 
 ### Prerequisites
 
-- Go 1.52.4 or higher
+- Go 1.25.4 or higher
 
 ### Build from source
 
