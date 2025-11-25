@@ -4,142 +4,80 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
-	"strings"
 	"time"
 )
 
-var (
-	monthRegex = regexp.MustCompile(`(\d+)M`)
-	unitRegex  = regexp.MustCompile(`(\d+)([mhdw])`)
-)
-
-// ParseDeadline accepts multiple deadline formats:
-// 1. Absolute: "YYYY-MM-DD HH:MM" (e.g., "2025-11-16 14:30")
-// 2. Single units: "1d", "2h", "3w", "4m", "1M" (from now)
-// 3. Combinations: "2d 1h", "1w 2d" (from now)
-func ParseDeadline(input string) (*time.Time, error) {
-	input = strings.TrimSpace(input)
-	if input == "" {
-		return nil, fmt.Errorf("deadline cannot be empty")
+func ParseDeadline(s string) (int64, error) {
+	if s == "" {
+		return 0, nil
 	}
 
-	if t, err := time.ParseInLocation("2006-01-02 15:04", input, time.Local); err == nil {
-		return &t, nil
+	durationRegex := regexp.MustCompile(`^(\d+)([hdwmy])$`)
+	if matches := durationRegex.FindStringSubmatch(s); matches != nil {
+		value, _ := strconv.Atoi(matches[1])
+		unit := matches[2]
+
+		var duration time.Duration
+		switch unit {
+		case "h":
+			duration = time.Hour * time.Duration(value)
+		case "d":
+			duration = time.Hour * 24 * time.Duration(value)
+		case "w":
+			duration = time.Hour * 24 * 7 * time.Duration(value)
+		case "m":
+			duration = time.Hour * 24 * 30 * time.Duration(value)
+		case "y":
+			duration = time.Hour * 24 * 365 * time.Duration(value)
+		}
+
+		return time.Now().Add(duration).Unix(), nil
 	}
 
-	duration, err := parseRelativeTime(input)
-	if err != nil {
-		return nil, fmt.Errorf("invalid deadline format: %v\nSupported formats:\n  - Absolute: YYYY-MM-DD HH:MM (e.g., 2025-11-16 14:30)\n  - Relative: 1d, 2h, 3w, 1M (e.g., 2d 3h 20m)", err)
+	t, err := time.Parse("2006-01-02", s)
+	if err == nil {
+		return t.Unix(), nil
 	}
 
-	deadline := time.Now().Add(duration)
-	return &deadline, nil
+	t, err = time.Parse("2006-01-02 15:04", s)
+	if err == nil {
+		return t.Unix(), nil
+	}
+
+	return 0, fmt.Errorf("invalid deadline format: use '2h', '1d', or '2006-01-02'")
 }
 
-func parseRelativeTime(input string) (time.Duration, error) {
-	originalInput := input
+func FormatDeadline(deadline int64) string {
+	if deadline == 0 {
+		return ""
+	}
 
-	input = strings.ToLower(input)
+	now := time.Now()
+	t := time.Unix(deadline, 0)
 
-	months := 0
-
-	monthMatches := monthRegex.FindAllStringSubmatch(originalInput, -1)
-	for _, match := range monthMatches {
-		value, err := strconv.Atoi(match[1])
-		if err != nil {
-			return 0, fmt.Errorf("invalid number, %s", match[1])
+	if t.Before(now) {
+		diff := now.Sub(t)
+		days := int(diff.Hours() / 24)
+		if days == 0 {
+			return "overdue"
 		}
-		if value <= 0 {
-			return 0, fmt.Errorf("time values must be postivie")
-		}
-		months += value
+		return fmt.Sprintf("overdue %dd", days)
 	}
 
-	processedInput := monthRegex.ReplaceAllString(originalInput, "")
-	processedInput = strings.ToLower(processedInput)
+	diff := t.Sub(now)
+	hours := int(diff.Hours())
 
-	matches := unitRegex.FindAllStringSubmatch(processedInput, -1)
-	if len(matches) == 0 && months == 0 {
-		return 0, fmt.Errorf("no valid time units found (use: m, h, d, w, M)")
+	if hours < 24 {
+		return fmt.Sprintf("due in %dh", hours)
 	}
 
-	reconstructed := ""
-	for _, match := range matches {
-		reconstructed += match[0]
+	days := hours / 24
+	if days == 1 {
+		return "due tomorrow"
 	}
-	for i := 0; i < months; i++ {
-		reconstructed += "M"
-	}
-
-	inputNoSpace := strings.ReplaceAll(strings.ReplaceAll(originalInput, " ", ""), "\t", "")
-	inputNoSpace = strings.ToLower(inputNoSpace)
-	for _, match := range monthMatches {
-		inputNoSpace = strings.Replace(inputNoSpace, strings.ToLower(match[0]), "M", 1)
-	}
-	reconstructedNoSpaces := strings.ToLower(reconstructed)
-
-	if len(reconstructedNoSpaces) != len(inputNoSpace) {
-		return 0, fmt.Errorf("contains invalid characters or format")
+	if days <= 2 {
+		return fmt.Sprintf("due in %dd", days)
 	}
 
-	var totalDuration time.Duration
-	for _, match := range matches {
-		value, err := strconv.Atoi(match[1])
-		if err != nil {
-			return 0, fmt.Errorf("invalid number: %s", match[1])
-		}
-
-		if value <= 0 {
-			return 0, fmt.Errorf("time values must be positive")
-		}
-
-		unit := match[2]
-
-		unitDuration, err := parseTimeUnit(value, unit)
-		if err != nil {
-			return 0, err
-		}
-		totalDuration += unitDuration
-	}
-
-	if months > 0 {
-		now := time.Now()
-		targetTime := now.AddDate(0, months, 0)
-		monthsDuration := targetTime.Sub(now)
-		totalDuration += monthsDuration
-	}
-
-	if totalDuration <= 0 && months == 0 {
-		return 0, fmt.Errorf("total duration must be positive")
-	}
-
-	return totalDuration, nil
-}
-
-func parseTimeUnit(value int, unit string) (time.Duration, error) {
-	switch unit {
-	case "m":
-		return time.Duration(value) * time.Minute, nil
-	case "h":
-		return time.Duration(value) * time.Hour, nil
-	case "d":
-		return time.Duration(value) * 24 * time.Hour, nil
-	case "w":
-		return time.Duration(value) * 7 * 24 * time.Hour, nil
-	default:
-		return 0, fmt.Errorf("invalid time unit: %s (use: m, h, d, w, M)", unit)
-	}
-}
-
-// FormatDeadlineHelp returns a help string explanation the deadline formats
-func FormatDeadlineHelp() string {
-	return `Deadline formats:
-	- Absolute: YYYY-MM-DD HH:MM (e.g., 2025-11-16 14:30)
-	- Relative units:
-		• m: minutes (30m = 30 minutes from now)
-		• h: hours (2h = 2 hours from now)
-		• d: days (1d = 1 day from now)
-		• w: weeks (2w = 2 weeks from now)
-		• M: months (1M = 1 month from now)
-	- Combinations: 2d 3h 30m (2days, 3hours, 30 minutes from now)`
+	return fmt.Sprintf("due %s", t.Format("2006-01-02"))
 }
