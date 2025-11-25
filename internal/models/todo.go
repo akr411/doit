@@ -1,47 +1,42 @@
 package models
 
-import "time"
+import (
+	"errors"
+	"time"
+)
 
-// Todo represents a todo item
 type Todo struct {
-	ID          string     `json:"id"`
-	Title       string     `json:"title"`
-	Description string     `json:"description"`
-	Deadline    *time.Time `json:"deadline,omitempty"`
-	Completed   bool       `json:"completed"`
-	CompletedAt *time.Time `json:"completed_at,omitempty"`
-	CreatedAt   time.Time  `json:"created_at"`
-	UpdatedAt   time.Time  `json:"updated_at"`
+	ID        string `json:"id"`
+	Task      string `json:"task"`
+	Note      string `json:"note"`
+	Deadline  int64  `json:"deadline"`
+	Completed bool   `json:"completed"`
+	CreatedAt int64  `json:"created_at"`
+	UpdatedAt int64  `json:"updated_at"`
 }
 
-// IsOverdue checks if the todo is overdue
-func (t *Todo) IsOverdue() bool {
-	if t.Deadline == nil || t.Completed {
-		return false
+func (t *Todo) Validate() error {
+	if t.Task == "" {
+		return errors.New("task must not be empty")
 	}
-	return t.Deadline.Before(time.Now())
+	return nil
 }
 
-// DaysUntilDeadline returns the number of days until the deadline
-func (t *Todo) DaysUntilDeadline() int {
-	if t.Deadline == nil {
-		return -1
+type Streak struct {
+	CurrentStreak   int   `json:"current_streak"`
+	MaxStreak       int   `json:"max_streak"`
+	TotalCompleted  int   `json:"total_completed"`
+	LastCompletedAt int64 `json:"last_completed_at"`
+}
+
+func NewTodo(task, note string, deadline int64) *Todo {
+	now := time.Now().UnixNano()
+	return &Todo{
+		Task:      task,
+		Note:      note,
+		Deadline:  deadline,
+		Completed: false,
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
-	duration := time.Until(*t.Deadline)
-	return int(duration.Hours() / 24)
-}
-
-// MarkComplete marks the todo as completed
-func (t *Todo) MarkComplete() {
-	t.Completed = true
-	now := time.Now()
-	t.CompletedAt = &now
-	t.UpdatedAt = now
-}
-
-// MarkIncomplete marks the todo as incomplete
-func (t *Todo) MarkIncomplete() {
-	t.Completed = false
-	t.CompletedAt = nil
-	t.UpdatedAt = time.Now()
 }

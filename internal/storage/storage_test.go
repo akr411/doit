@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -8,234 +9,186 @@ import (
 	"github.com/akr411/doit/internal/models"
 )
 
-func TestBoltStorage_TodoOperation(t *testing.T) {
-	tempDir := t.TempDir()
-	dbPath := filepath.Join(tempDir, "test.db")
+func setupTestDB(t *testing.T) (*Storage, func()) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
 
-	storage, err := NewBoltStorage(dbPath)
+	origGetDBPath := getDBPath
+	getDBPath = func() (string, error) {
+		return dbPath, nil
+	}
+
+	s, err := New()
 	if err != nil {
-		t.Fatalf("Failed to create storage: %v", err)
-	}
-	defer storage.Close()
-
-	todo := &models.Todo{
-		ID:          "test-1",
-		Title:       "Test Todo",
-		Description: "Test Description",
-		CreatedAt:   time.Now(),
-		UpdatedAt:   time.Now(),
+		t.Fatalf("failed to create storage: %v", err)
 	}
 
-	err = storage.SaveTodo(todo)
+	cleanup := func() {
+		s.Close()
+		getDBPath = origGetDBPath
+		os.RemoveAll(tmpDir)
+	}
+
+	return s, cleanup
+}
+
+func TestSaveAndGetTodo(t *testing.T) {
+	s, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	todo := models.NewTodo("Buy milk", "Organic", 0)
+
+	if err := s.SaveTodo(todo); err != nil {
+		t.Fatalf("SaveTodo failed: %v", err)
+	}
+
+	if todo.ID == "" {
+		t.Error("ID should be generated")
+	}
+
+	retrieved, err := s.GetTodo(todo.ID)
 	if err != nil {
-		t.Errorf("SaveTodo failed: %v", err)
+		t.Fatalf("GetTodo failed: %v", err)
 	}
 
-	retrieved, err := storage.GetTodo("test-1")
+	if retrieved.Task != todo.Task {
+		t.Errorf("expected task %q, got %q", todo.Task, retrieved.Task)
+	}
+	if retrieved.Note != todo.Note {
+		t.Errorf("expected note %q, got %q", todo.Note, retrieved.Note)
+	}
+}
+
+func TestGetAllTodos(t *testing.T) {
+	s, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	todo1 := models.NewTodo("Task 1", "", 0)
+	todo2 := models.NewTodo("Task 2", "", time.Now().Unix()+3600)
+	todo3 := models.NewTodo("Task 3", "", 0)
+	todo3.Completed = true
+
+	s.SaveTodo(todo1)
+	s.SaveTodo(todo2)
+	s.SaveTodo(todo3)
+
+	todos, err := s.GetAllTodos()
 	if err != nil {
-		t.Errorf("GetTodo failed: %v", err)
+		t.Fatalf("GetAllTodos failed: %v", err)
 	}
 
-	retrieved.Title = "Updated Title"
-	err = storage.UpdateTodo(retrieved)
+	if len(todos) != 3 {
+		t.Errorf("expected 3 todos, got %d", len(todos))
+	}
+}
+
+func TestUpdateTodo(t *testing.T) {
+	s, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	todo := models.NewTodo("Original task", "", 0)
+	s.SaveTodo(todo)
+
+	todo.Task = "Updated task"
+	todo.Completed = true
+	todo.UpdatedAt = time.Now().Unix()
+
+	if err := s.UpdateTodo(todo); err != nil {
+		t.Fatalf("UpdateTodo failed: %v", err)
+	}
+
+	retrieved, err := s.GetTodo(todo.ID)
 	if err != nil {
-		t.Errorf("UpdateTodo failed: %v", err)
+		t.Fatalf("GetTodo failed: %v", err)
 	}
 
-	updated, err := storage.GetTodo("test-1")
-	if err != nil {
-		t.Errorf("Updated todo title = %v, want Updated Title", updated.Title)
+	if retrieved.Task != "Updated task" {
+		t.Errorf("expected updated task, got %q", retrieved.Task)
+	}
+	if !retrieved.Completed {
+		t.Error("todo should be completed")
+	}
+}
+
+func TestDeleteTodo(t *testing.T) {
+	s, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	todo := models.NewTodo("To be deleted", "", 0)
+	s.SaveTodo(todo)
+
+	if err := s.DeleteTodo(todo.ID); err != nil {
+		t.Fatalf("DeleteTodo failed: %v", err)
 	}
 
-	todo2 := &models.Todo{
-		ID:          "test-2",
-		Title:       "Second Todo",
-		Description: "Second Description",
-		CreatedAt:   time.Now(),
-		UpdatedAt:   time.Now(),
-	}
-
-	err = storage.SaveTodo(todo2)
-	if err != nil {
-		t.Errorf("SaveTodo for Second Todo failed: %v", err)
-	}
-
-	todos, err := storage.GetAllTodos()
-	if err != nil {
-		t.Errorf("GetAllTodos failed: %v", err)
-	}
-
-	if len(todos) != 2 {
-		t.Errorf("GetAllTodos returned %d todos, want 2", len(todos))
-	}
-
-	err = storage.DeleteTodo("test-1")
-	if err != nil {
-		t.Errorf("DeleteTodo failed: %v", err)
-	}
-
-	_, err = storage.GetTodo("test-1")
+	_, err := s.GetTodo(todo.ID)
 	if err == nil {
-		t.Error("GetTodo should have failed after deletion")
+		t.Error("expected error when getting deleted todo")
 	}
 }
 
-func TestBoltStorage_Sorting(t *testing.T) {
-	tempDir := t.TempDir()
-	dbPath := filepath.Join(tempDir, "test.db")
+func TestStreaks(t *testing.T) {
+	s, cleanup := setupTestDB(t)
+	defer cleanup()
 
-	storage, err := NewBoltStorage(dbPath)
+	streak, err := s.GetStreak()
 	if err != nil {
-		t.Fatalf("Failed to create storage: %v", err)
-	}
-	defer storage.Close()
-
-	now := time.Now()
-
-	todos := []*models.Todo{
-		{
-			ID:        "1",
-			Title:     "No deadline",
-			Deadline:  nil,
-			Completed: false,
-		},
-		{
-			ID:        "2",
-			Title:     "Due deadline",
-			Deadline:  timePtr(now.Add(24 * time.Hour)),
-			Completed: false,
-		},
-		{
-			ID:        "3",
-			Title:     "Due in 3 days",
-			Deadline:  timePtr(now.Add(72 * time.Hour)),
-			Completed: false,
-		},
-		{
-			ID:        "4",
-			Title:     "Completed",
-			Deadline:  timePtr(now.Add(24 * time.Hour)),
-			Completed: true,
-		},
-	}
-
-	for _, todo := range todos {
-		if err := storage.SaveTodo(todo); err != nil {
-			t.Fatalf("Failed to save todo: %v", err)
-		}
-	}
-
-	sorted, err := storage.GetAllTodos()
-	if err != nil {
-		t.Fatalf("Failed to get todos: %v", err)
-	}
-
-	// First should be incomplete with soonest deadline
-	if sorted[0].ID != "2" {
-		t.Errorf("First todo should be 'Due tomorrow', got %s", sorted[0].Title)
-	}
-
-	// Last should be completed
-	if !sorted[len(sorted)-1].Completed {
-		t.Errorf("Last todo should be completed")
-	}
-}
-
-func TestBoltStorage_Streak(t *testing.T) {
-	tempDir := t.TempDir()
-	dbPath := filepath.Join(tempDir, "test.db")
-
-	storage, err := NewBoltStorage(dbPath)
-	if err != nil {
-		t.Fatalf("Failed to create storage: %v", err)
-	}
-	defer storage.Close()
-
-	streak, err := storage.GetStreak()
-	if err != nil {
-		t.Errorf("GetStreak failed: %v", err)
+		t.Fatalf("GetStreak failed: %v", err)
 	}
 
 	if streak.CurrentStreak != 0 {
-		t.Errorf("Initial current streak = %d, want 0", streak.CurrentStreak)
+		t.Errorf("expected initial streak to be 0, got %d", streak.CurrentStreak)
 	}
 
 	streak.CurrentStreak = 5
 	streak.MaxStreak = 10
 	streak.TotalCompleted = 50
-	streak.LastCompletedAt = time.Now()
+	streak.LastCompletedAt = time.Now().Unix()
 
-	err = storage.UpdateStreak(streak)
+	if err := s.UpdateStreak(streak); err != nil {
+		t.Fatalf("UpdateStreak failed: %v", err)
+	}
+
+	retrieved, err := s.GetStreak()
 	if err != nil {
-		t.Errorf("UpdateStreak failed: %v", err)
+		t.Fatalf("GetStreak failed: %v", err)
 	}
 
-	updated, err := storage.GetStreak()
+	if retrieved.CurrentStreak != 5 {
+		t.Errorf("expected current streak 5, got %d", retrieved.CurrentStreak)
+	}
+	if retrieved.MaxStreak != 10 {
+		t.Errorf("expected max streak 10, got %d", retrieved.MaxStreak)
+	}
+}
+
+func TestConfig(t *testing.T) {
+	s, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	if err := s.SetConfig("test_key", "test_value"); err != nil {
+		t.Fatalf("SetConfig failed: %v", err)
+	}
+
+	value, err := s.GetConfig("test_key")
 	if err != nil {
-		t.Errorf("GetStreak after update failed: %v", err)
+		t.Fatalf("GetConfig failed: %v", err)
 	}
 
-	if updated.CurrentStreak != 5 {
-		t.Errorf("Updated current streak = %d, want 5", updated.CurrentStreak)
+	if value != "test_value" {
+		t.Errorf("expected 'test_value', got %q", value)
 	}
 
-	if updated.MaxStreak != 10 {
-		t.Errorf("Updated max streak = %d, want 10", updated.MaxStreak)
-	}
-}
-
-func TestGetTopUpcomingTodos(t *testing.T) {
-	now := time.Now()
-
-	todos := []*models.Todo{
-		{ID: "3", Title: "Much Later", Deadline: timePtr(now.Add(12 * time.Hour)), Completed: false},
-		{ID: "5", Title: "Completed", Deadline: timePtr(now.Add(5 * time.Hour)), Completed: true},
-		{ID: "4", Title: "No deadline", Deadline: nil, Completed: false},
-		{ID: "2", Title: "Later", Deadline: timePtr(now.Add(10 * time.Hour)), Completed: false},
-		{ID: "1", Title: "Soon", Deadline: timePtr(now.Add(1 * time.Hour)), Completed: false},
+	if err := s.SetConfig("test_key", "updated_value"); err != nil {
+		t.Fatalf("SetConfig update failed: %v", err)
 	}
 
-	top := GetTopUpcomingTodos(todos, 2)
-
-	if len(top) != 2 {
-		t.Errorf("GetTopUpcomingTodos returned %d todos, want 2", len(top))
+	value, err = s.GetConfig("test_key")
+	if err != nil {
+		t.Fatalf("GetConfig failed: %v", err)
 	}
 
-	if top[0].ID != "1" {
-		t.Errorf("First todo should be 'Soon', got %s", top[0].Title)
+	if value != "updated_value" {
+		t.Errorf("expected 'updated_value', got %q", value)
 	}
-
-	if top[1].ID != "2" {
-		t.Errorf("Second todo should be 'Later', got %s", top[1].Title)
-	}
-}
-
-func TestGetTodosWithoutDeadline(t *testing.T) {
-	now := time.Now()
-
-	todos := []*models.Todo{
-		{ID: "1", Title: "With deadline", Deadline: timePtr(now.Add(1 * time.Hour)), Completed: false},
-		{ID: "2", Title: "No deadline 1", Deadline: nil, Completed: false},
-		{ID: "3", Title: "No deadline 2", Deadline: nil, Completed: false},
-		{ID: "4", Title: "Completed no deadline", Deadline: nil, Completed: true},
-	}
-
-	noDeadline := GetTodosWithoutDeadline(todos)
-
-	if len(noDeadline) != 2 {
-		t.Errorf("GetTodosWithoutDeadline returned %d todos, want 2", len(noDeadline))
-	}
-
-	for _, todo := range noDeadline {
-		if todo.Deadline != nil {
-			t.Errorf("Todo %s should not have deadline", todo.Title)
-		}
-		if todo.Completed {
-			t.Errorf("Todo %s should not be completed", todo.Title)
-		}
-	}
-}
-
-func timePtr(t time.Time) *time.Time {
-	return &t
 }

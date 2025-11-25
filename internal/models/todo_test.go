@@ -2,158 +2,69 @@ package models
 
 import (
 	"testing"
-	"time"
 )
 
-func TestTodo_IsOverdue(t *testing.T) {
+func TestTodoValidation(t *testing.T) {
 	tests := []struct {
-		name     string
-		todo     Todo
-		expected bool
+		name    string
+		todo    *Todo
+		wantErr bool
 	}{
 		{
-			name: "overdue todo",
-			todo: Todo{
-				Deadline:  timePtr(time.Now().Add(-24 * time.Hour)),
-				Completed: false,
-			},
-			expected: true,
+			name:    "valid todo with task",
+			todo:    &Todo{Task: "Buy milk"},
+			wantErr: false,
 		},
 		{
-			name: "future deadline",
-			todo: Todo{
-				Deadline:  timePtr(time.Now().Add(24 * time.Hour)),
-				Completed: false,
-			},
-			expected: false,
+			name:    "empty task should error",
+			todo:    &Todo{Task: ""},
+			wantErr: true,
 		},
 		{
-			name: "completed todo with past deadline",
-			todo: Todo{
-				Deadline:  timePtr(time.Now().Add(-24 * time.Hour)),
-				Completed: true,
-			},
-			expected: false,
+			name:    "task with note is valid",
+			todo:    &Todo{Task: "Buy milk", Note: "Organic"},
+			wantErr: false,
 		},
 		{
-			name: "no deadline",
-			todo: Todo{
-				Deadline:  nil,
-				Completed: false,
-			},
-			expected: false,
+			name:    "task without note is valid",
+			todo:    &Todo{Task: "Buy milk", Note: ""},
+			wantErr: false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.todo.IsOverdue(); got != tt.expected {
-				t.Errorf("IsOverdue() = %v, want %v", got, tt.expected)
+			err := tt.todo.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
 	}
 }
 
-func TestTodo_DaysUntilDeadline(t *testing.T) {
-	tests := []struct {
-		name     string
-		todo     Todo
-		expected int
-		delta    int
-	}{
-		{
-			name: "deadline in 5 days",
-			todo: Todo{
-				Deadline: timePtr(time.Now().Add(5 * 24 * time.Hour)),
-			},
-			expected: 5,
-			delta:    1,
-		},
-		{
-			name: "deadline was 3 days ago",
-			todo: Todo{
-				Deadline: timePtr(time.Now().Add(-3 * 24 * time.Hour)),
-			},
-			expected: -3,
-			delta:    1,
-		},
-		{
-			name: "no deadline",
-			todo: Todo{
-				Deadline: nil,
-			},
-			expected: -1,
-			delta:    0,
-		},
-		{
-			name: "deadline today",
-			todo: Todo{
-				Deadline: timePtr(time.Now().Add(12 * time.Hour)),
-			},
-			expected: 0,
-			delta:    1,
-		},
-	}
+func TestNewTodo(t *testing.T) {
+	task := "Buy milk"
+	note := "Organic"
+	deadline := int64(1234567890)
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := tt.todo.DaysUntilDeadline()
-			if abs(got-tt.expected) > tt.delta {
-				t.Errorf("DaysUntilDeadline() = %v, want %v (+-%d)", got, tt.expected, tt.delta)
-			}
-		})
-	}
-}
+	todo := NewTodo(task, note, deadline)
 
-func TestTodo_MarkComplete(t *testing.T) {
-	todo := Todo{
-		ID:        "test-1",
-		Title:     "Test Todo",
-		Completed: false,
+	if todo.Task != task {
+		t.Errorf("expected task %q, got %q", task, todo.Task)
 	}
-	todo.MarkComplete()
-
-	if !todo.Completed {
-		t.Error("MarkComplete() did not set Completed to true")
+	if todo.Note != note {
+		t.Errorf("expected note %q, got %q", note, todo.Note)
 	}
-	if todo.CompletedAt == nil {
-		t.Error("MarkComplete() did not set CompletedAt")
+	if todo.Deadline != deadline {
+		t.Errorf("expected deadline %d, got %d", deadline, todo.Deadline)
 	}
-	if todo.UpdatedAt.IsZero() {
-		t.Error("MarkComplete() did not update UpdatedAt")
-	}
-}
-
-func TestTodo_MarkIncomplete(t *testing.T) {
-	completedTime := time.Now()
-	todo := Todo{
-		ID:          "test-1",
-		Title:       "Test Todo",
-		Completed:   true,
-		CompletedAt: &completedTime,
-	}
-
-	todo.MarkIncomplete()
-
 	if todo.Completed {
-		t.Error("MarkIncomplete() did not set Completed to false")
+		t.Error("new todo should not be completed")
 	}
-	if todo.CompletedAt != nil {
-		t.Error("MarkIncomplete() did not clear CompletedAt")
+	if todo.CreatedAt == 0 {
+		t.Error("created_at should be set")
 	}
-	if todo.UpdatedAt.IsZero() {
-		t.Error("MarkIncomplete() did not update UpdatedAt")
+	if todo.UpdatedAt == 0 {
+		t.Error("updated_at should be set")
 	}
-}
-
-// Helper functions
-func timePtr(t time.Time) *time.Time {
-	return &t
-}
-
-func abs(n int) int {
-	if n < 0 {
-		return -n
-	}
-	return n
 }
