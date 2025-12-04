@@ -68,8 +68,8 @@ func (d *DiscoveryService) Start(port int) error {
 	service, err := mdns.NewMDNSService(
 		instanceName,
 		ServiceName,
-		"",
-		"",
+		"local.",
+		instanceName+".local.",
 		port,
 		ips,
 		[]string{
@@ -145,18 +145,15 @@ func (d *DiscoveryService) discover() {
 
 	log.Printf("[DEBUG] Discovery starting: ourID=%s", ourID)
 
-	ifaces, err := getActiveInterfaces()
-	if err != nil {
-		log.Printf("[ERROR] Failed to get active interfaces: %v", err)
-		return
-	}
-
 	entriesCh := make(chan *mdns.ServiceEntry, 10)
 
 	go func() {
+		defer log.Printf("[DEBUG] Entry processing goroutine finished")
+		count := 0
 		for entry := range entriesCh {
-			log.Printf("[DEBUG] Found: %s at %v:%d, TXT=%v",
-				entry.Name, entry.AddrV4, entry.Port, entry.InfoFields)
+			count++
+			log.Printf("[DEBUG] Entry #%d: Name=%s, Host=%s, AddrV4=%v, AddrV6=%v, Port=%d, Info=%v",
+				count, entry.Name, entry.Host, entry.AddrV4, entry.AddrV6, entry.Port, entry.InfoFields)
 
 			deviceID := extractFromInfo(entry.InfoFields, "device_id")
 			if deviceID == "" {
@@ -202,9 +199,9 @@ func (d *DiscoveryService) discover() {
 		Service:             ServiceName,
 		Domain:              "local",
 		Timeout:             5 * time.Second,
-		Interface:           &ifaces[0],
 		Entries:             entriesCh,
 		WantUnicastResponse: false,
+		DisableIPv6:         true,
 	}
 
 	if err := mdns.Query(params); err != nil {
