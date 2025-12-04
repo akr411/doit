@@ -65,6 +65,11 @@ func (ld *LocalDiscovery) Start(port int) error {
 		ld.running = false
 		return fmt.Errorf("failed to bind IPv4 UDP: %w", err)
 	}
+
+	if err := conn4.SetReadBuffer(1048576); err != nil {
+		log.Printf("[WARN] Failed to set read buffer: %v", err)
+	}
+
 	ld.conn4 = conn4
 
 	addr6 := &net.UDPAddr{
@@ -220,10 +225,14 @@ func (ld *LocalDiscovery) receiveLoop() {
 func (ld *LocalDiscovery) processPacket(data []byte, srcIP net.IP, ourID string) {
 	packet, err := UnmarshalAnnouncement(data)
 	if err != nil {
+		log.Printf("[DEBUG] Failed to unmarshal packet from %s: %v", srcIP, err)
 		return
 	}
 
+	log.Printf("[DEBUG] Received packet from %s: DeviceID=%s, Port=%d, Name=%s", srcIP, packet.DeviceID, packet.Port, packet.Name)
+
 	if packet.DeviceID == ourID {
+		log.Printf("[DEBUG] Skipping self-announcement from %s", srcIP)
 		return
 	}
 
