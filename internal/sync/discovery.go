@@ -7,8 +7,6 @@ import (
 	"net"
 	"sync"
 	"time"
-
-	"github.com/hashicorp/mdns"
 )
 
 const (
@@ -16,7 +14,6 @@ const (
 )
 
 type DiscoveryService struct {
-	server  *mdns.Server
 	store   StorageInterface
 	stopCh  chan struct{}
 	mu      sync.Mutex
@@ -35,81 +32,6 @@ func NewDiscoveryService(store StorageInterface) *DiscoveryService {
 	}
 }
 
-func (d *DiscoveryService) Start(port int) error {
-	d.mu.Lock()
-	if d.running {
-		d.mu.Unlock()
-		return fmt.Errorf("discovery service already running")
-	}
-	d.running = true
-	d.mu.Unlock()
-
-	deviceID, err := GetDeviceID(d.store.GetDB())
-	if err != nil {
-		d.running = false
-		return fmt.Errorf("failed to get device ID: %w", err)
-	}
-
-	deviceName := GetDeviceName()
-	instanceName := "doit-" + deviceID[:8]
-
-	ips, err := getLocalIPs()
-	if err != nil {
-		d.running = false
-		return fmt.Errorf("failed to get local IPs: %w", err)
-	}
-
-	service, err := mdns.NewMDNSService(
-		instanceName,
-		ServiceName,
-		"local.",
-		instanceName+".local.",
-		port,
-		ips,
-		[]string{
-			"v=1",
-			"device_id=" + deviceID,
-			"name=" + deviceName,
-		},
-	)
-	if err != nil {
-		d.running = false
-		return fmt.Errorf("failed to create mDNS service: %w", err)
-	}
-
-	server, err := mdns.NewServer(&mdns.Config{Zone: service})
-	if err != nil {
-		d.running = false
-		return fmt.Errorf("failed to create mDNS server: %w", err)
-	}
-
-	d.server = server
-	go d.discoveryLoop()
-
-	log.Printf("[INFO] mDNS service announced: %s on port %d", instanceName, port)
-
-	return nil
-}
-
-func (d *DiscoveryService) Stop() error {
-	d.mu.Lock()
-	if !d.running {
-		d.mu.Unlock()
-		return nil
-	}
-	d.running = false
-	d.mu.Unlock()
-
-	close(d.stopCh)
-
-	if d.server != nil {
-		if err := d.server.Shutdown(); err != nil {
-			return fmt.Errorf("failed to shutdown mDNS server: %w", err)
-		}
-	}
-
-	return nil
-}
 
 func (d *DiscoveryService) discoveryLoop() {
 	ticker := time.NewTicker(30 * time.Second)

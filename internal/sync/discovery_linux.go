@@ -12,6 +12,123 @@ import (
 	"github.com/holoplot/go-avahi"
 )
 
+type avahiState struct {
+	conn  *dbus.Conn
+	server *avahi.Server
+	group *avahi.EntryGroup
+}
+
+var avahiSvc *avahiState
+
+func (d *DiscoveryService) Start(port int) error {
+	d.mu.Lock()
+	if d.running {
+		d.mu.Unlock()
+		return fmt.Errorf("discovery service already running")
+	}
+	d.running = true
+	d.mu.Unlock()
+
+	deviceID, err := GetDeviceID(d.store.GetDB())
+	if err != nil {
+		d.running = false
+		return fmt.Errorf("failed to get device ID: %w", err)
+	}
+
+	deviceName := GetDeviceName()
+	instanceName := "doit-" + deviceID[:8]
+
+	conn, err := dbus.SystemBus()
+	if err != nil {
+		d.running = false
+		return fmt.Errorf("failed to connect to system bus: %w", err)
+	}
+
+	server, err := avahi.ServerNew(conn)
+	if err != nil {
+		d.running = false
+		return fmt.Errorf("failed to create avahi server: %w", err)
+	}
+
+	group, err := server.EntryGroupNew()
+	if err != nil {
+		server.Close()
+		d.running = false
+		return fmt.Errorf("failed to create entry group: %w", err)
+	}
+
+	hostname, err := server.GetHostNameFqdn()
+	if err != nil {
+		server.Close()
+		d.running = false
+		return fmt.Errorf("failed to get hostname: %w", err)
+	}
+
+	txt := [][]byte{
+		[]byte("v=1"),
+		[]byte("device_id=" + deviceID),
+		[]byte("name=" + deviceName),
+	}
+
+	err = group.AddService(avahi.InterfaceUnspec, avahi.ProtoUnspec, 0,
+		instanceName, ServiceName, "local", hostname, uint16(port), txt)
+	if err != nil {
+		server.Close()
+		d.running = false
+		return fmt.Errorf("failed to add service: %w", err)
+	}
+
+	err = group.Commit()
+	if err != nil {
+		server.Close()
+		d.running = false
+		return fmt.Errorf("failed to commit entry group: %w", err)
+	}
+
+	state, err := group.GetState()
+	if err != nil {
+		log.Printf("[WARN] Failed to get entry group state: %v", err)
+	} else {
+		log.Printf("[DEBUG] EntryGroup state after commit: %d", state)
+	}
+
+	avahiSvc = &avahiState{
+		conn:  conn,
+		server: server,
+		group: group,
+	}
+
+	go d.discoveryLoop()
+
+	log.Printf("[INFO] Avahi service announced: %s on port %d (host=%s)", instanceName, port, hostname)
+
+	return nil
+}
+
+func (d *DiscoveryService) Stop() error {
+	d.mu.Lock()
+	if !d.running {
+		d.mu.Unlock()
+		return nil
+	}
+	d.running = false
+	d.mu.Unlock()
+
+	close(d.stopCh)
+
+	if avahiSvc != nil {
+		if avahiSvc.group != nil {
+			avahiSvc.group.Reset()
+		}
+		if avahiSvc.server != nil {
+			avahiSvc.server.Close()
+		}
+		avahiSvc = nil
+	}
+
+	return nil
+}
+
 func (d *DiscoveryService) discover() {
 	ourID, err := GetDeviceID(d.store.GetDB())
 	if err != nil {
