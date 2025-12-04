@@ -52,7 +52,7 @@ func (pm *PeerManager) AddOrUpdatePeer(peer *Peer) error {
 		return err
 	}
 
-	if peer.Status == "connected" || peer.Status == "syncing" {
+	if peer.Status == "discovered" || peer.Status == "connected" || peer.Status == "syncing" {
 		pm.mu.Lock()
 		pm.activePeers[peer.ID] = peer
 		pm.mu.Unlock()
