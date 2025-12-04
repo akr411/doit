@@ -256,6 +256,9 @@ func getActiveInterfaces() ([]net.Interface, error) {
 		if iface.Flags&net.FlagRunning == 0 {
 			continue
 		}
+		if shouldSkipInterface(iface.Name) {
+			continue
+		}
 		active = append(active, iface)
 	}
 
@@ -264,4 +267,24 @@ func getActiveInterfaces() ([]net.Interface, error) {
 	}
 
 	return active, nil
+}
+
+func shouldSkipInterface(name string) bool {
+	skipPrefixes := []string{
+		"utun",   // VPN tunnels
+		"bridge", // Bridge interfaces
+		"awdl",   // Apple Wireless Direct Link
+		"llw",    // Low latency WLAN
+		"anpi",   // Apple virtual interfaces
+		"ap",     // Access point interfaces
+		"gif",    // Generic tunnel
+		"stf",    // 6to4 tunnel
+	}
+
+	for _, prefix := range skipPrefixes {
+		if len(name) >= len(prefix) && name[:len(prefix)] == prefix {
+			return true
+		}
+	}
+	return false
 }
