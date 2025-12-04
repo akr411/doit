@@ -217,23 +217,29 @@ func extractFromText(text []string, key string) string {
 }
 
 func getLocalIPs() ([]net.IP, error) {
-	var ips []net.IP
-
-	addrs, err := net.InterfaceAddrs()
+	ifaces, err := getActiveInterfaces()
 	if err != nil {
 		return nil, err
 	}
 
-	for _, addr := range addrs {
-		if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
-			if ipnet.IP.To4() != nil {
-				ips = append(ips, ipnet.IP)
+	var ips []net.IP
+	for _, iface := range ifaces {
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+
+		for _, addr := range addrs {
+			if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+				if ipnet.IP.To4() != nil {
+					ips = append(ips, ipnet.IP)
+				}
 			}
 		}
 	}
 
 	if len(ips) == 0 {
-		return nil, fmt.Errorf("no non-loopback IPv4 addresses found")
+		return nil, fmt.Errorf("no non-loopback IPv4 addresses found on active interfaces")
 	}
 
 	return ips, nil
