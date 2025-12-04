@@ -66,12 +66,12 @@ func GetSyncPort(db *sql.DB) int {
 	var value string
 	err := db.QueryRow("SELECT value FROM config WHERE key = 'sync_port'").Scan(&value)
 	if err != nil {
-		return 8888
+		return 49152
 	}
 
 	var port int
 	if _, err := fmt.Sscanf(value, "%d", &port); err != nil {
-		return 8888
+		return 49152
 	}
 
 	return port

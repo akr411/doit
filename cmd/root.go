@@ -5,12 +5,14 @@ import (
 	"os"
 
 	"github.com/akr411/doit/internal/storage"
+	"github.com/akr411/doit/internal/sync"
 	"github.com/akr411/doit/internal/ui"
 	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 )
 
 var store *storage.Storage
+var syncEngine *sync.SyncEngine
 var isTTY bool
 
 var rootCmd = &cobra.Command{
@@ -50,8 +52,25 @@ func init() {
 			ui.PrintWarning("Warning: failed to cleanup sync data: %v", err)
 		}
 	}
+
+	if sync.IsSyncEnabled(store.GetDB()) {
+		syncEngine, err = sync.NewSyncEngine(store)
+		if err != nil {
+			ui.PrintWarning("Warning: failed to create sync engine: %v", err)
+		} else {
+			err = syncEngine.Start()
+			if err != nil {
+				ui.PrintWarning("Warning: failed to start sync engine: %v", err)
+			}
+		}
+	}
 }
 
 func Execute() error {
+	defer func() {
+		if syncEngine != nil && syncEngine.IsRunning() {
+			syncEngine.Stop()
+		}
+	}()
 	return rootCmd.Execute()
 }

@@ -17,6 +17,23 @@ type Storage struct {
 	db *sql.DB
 }
 
+type Peer struct {
+	ID        string
+	Name      string
+	Address   string
+	LastSeen  int64
+	Status    string
+	CreatedAt int64
+}
+
+type SyncState struct {
+	PeerID             string
+	LastOperationID    string
+	LastSyncTime       int64
+	OperationsSent     int64
+	OperationsReceived int64
+}
+
 var getDBPath = func() (string, error) {
 	var dataDir string
 	if os.Getenv("XDG_DATA_HOME") != "" {
@@ -114,6 +131,27 @@ func (s *Storage) createTables() error {
 	CREATE INDEX IF NOT EXISTS idx_ops_synced ON operations(synced);
 	CREATE INDEX IF NOT EXISTS idx_ops_device ON operations(device_id);
 	CREATE INDEX IF NOT EXISTS idx_ops_todo ON operations(todo_id);
+
+	CREATE TABLE IF NOT EXISTS peers (
+		id TEXT PRIMARY KEY,
+		name TEXT NOT NULL,
+		address TEXT NOT NULL,
+		last_seen INTEGER NOT NULL,
+		status TEXT NOT NULL,
+		created_at INTEGER NOT NULL
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_peers_status ON peers(status);
+	CREATE INDEX IF NOT EXISTS idx_peers_last_seen ON peers(last_seen);
+
+	CREATE TABLE IF NOT EXISTS sync_state (
+		peer_id TEXT PRIMARY KEY,
+		last_operation_id TEXT,
+		last_sync_time INTEGER,
+		operations_sent INTEGER DEFAULT 0,
+		operations_received INTEGER DEFAULT 0,
+		FOREIGN KEY (peer_id) REFERENCES peers(id) ON DELETE CASCADE
+	);
 	`
 
 	if _, err := s.db.Exec(schema); err != nil {
@@ -582,6 +620,7 @@ func (s *Storage) GetOperations(since string) ([]map[string]interface{}, error) 
 		rows, err = s.db.Query(`
 			SELECT id, type, todo_id, data, timestamp, device_id
 			FROM operations
+			WHERE synced = 0
 			ORDER BY timestamp ASC, id ASC
 		`)
 	} else {
@@ -594,7 +633,7 @@ func (s *Storage) GetOperations(since string) ([]map[string]interface{}, error) 
 		rows, err = s.db.Query(`
 			SELECT id, type, todo_id, data, timestamp, device_id
 			FROM operations
-			WHERE timestamp > ?
+			WHERE timestamp > ? AND synced = 0
 			ORDER BY timestamp ASC, id ASC
 		`, sinceTimestamp)
 	}
@@ -617,7 +656,7 @@ func (s *Storage) GetOperations(since string) ([]map[string]interface{}, error) 
 			"id":        id,
 			"type":      opType,
 			"todo_id":   todoID,
-			"data":      []byte(data),
+			"data":      string(data),
 			"timestamp": timestamp,
 			"device_id": deviceID,
 		})
@@ -651,7 +690,7 @@ func (s *Storage) GetOperationsSince(timestamp int64) ([]map[string]interface{},
 			"id":        id,
 			"type":      opType,
 			"todo_id":   todoID,
-			"data":      []byte(data),
+			"data":      string(data),
 			"timestamp": timestamp,
 			"device_id": deviceID,
 		})
@@ -698,6 +737,138 @@ func (s *Storage) MarkOperationsSynced(ids []string) error {
 
 func (s *Storage) GetDB() *sql.DB {
 	return s.db
+}
+
+func (s *Storage) AddOrUpdatePeer(peer *Peer) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	_, err = tx.Exec(`
+		INSERT INTO peers (id, name, address, last_seen, status, created_at)
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			name = excluded.name,
+			address = excluded.address,
+			last_seen = excluded.last_seen,
+			status = excluded.status
+	`, peer.ID, peer.Name, peer.Address, peer.LastSeen, peer.Status, peer.CreatedAt)
+
+	if err != nil {
+		return fmt.Errorf("failed to add/update peer: %w", err)
+	}
+
+	return tx.Commit()
+}
+
+func (s *Storage) GetPeers() ([]*Peer, error) {
+	rows, err := s.db.Query(`
+		SELECT id, name, address, last_seen, status, created_at
+		FROM peers
+		ORDER BY last_seen DESC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query peers: %w", err)
+	}
+	defer rows.Close()
+
+	var peers []*Peer
+	for rows.Next() {
+		peer := &Peer{}
+		err := rows.Scan(&peer.ID, &peer.Name, &peer.Address, &peer.LastSeen, &peer.Status, &peer.CreatedAt)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan peer: %w", err)
+		}
+		peers = append(peers, peer)
+	}
+
+	return peers, rows.Err()
+}
+
+func (s *Storage) GetActivePeers() ([]*Peer, error) {
+	rows, err := s.db.Query(`
+		SELECT id, name, address, last_seen, status, created_at
+		FROM peers
+		WHERE status IN ('discovered', 'connected', 'syncing')
+		ORDER BY last_seen DESC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query active peers: %w", err)
+	}
+	defer rows.Close()
+
+	var peers []*Peer
+	for rows.Next() {
+		peer := &Peer{}
+		err := rows.Scan(&peer.ID, &peer.Name, &peer.Address, &peer.LastSeen, &peer.Status, &peer.CreatedAt)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan peer: %w", err)
+		}
+		peers = append(peers, peer)
+	}
+
+	return peers, rows.Err()
+}
+
+func (s *Storage) UpdatePeerStatus(id string, status string) error {
+	_, err := s.db.Exec("UPDATE peers SET status = ? WHERE id = ?", status, id)
+	if err != nil {
+		return fmt.Errorf("failed to update peer status: %w", err)
+	}
+	return nil
+}
+
+func (s *Storage) UpdatePeerLastSeen(id string, timestamp int64) error {
+	_, err := s.db.Exec("UPDATE peers SET last_seen = ? WHERE id = ?", timestamp, id)
+	if err != nil {
+		return fmt.Errorf("failed to update peer last_seen: %w", err)
+	}
+	return nil
+}
+
+func (s *Storage) GetSyncState(peerID string) (*SyncState, error) {
+	state := &SyncState{PeerID: peerID}
+	err := s.db.QueryRow(`
+		SELECT last_operation_id, last_sync_time, operations_sent, operations_received
+		FROM sync_state
+		WHERE peer_id = ?
+	`, peerID).Scan(&state.LastOperationID, &state.LastSyncTime, &state.OperationsSent, &state.OperationsReceived)
+
+	if err == sql.ErrNoRows {
+		return state, nil
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to get sync state: %w", err)
+	}
+
+	return state, nil
+}
+
+func (s *Storage) UpdateSyncState(peerID string, state *SyncState) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	_, err = tx.Exec(`
+		INSERT INTO sync_state (peer_id, last_operation_id, last_sync_time, operations_sent, operations_received)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(peer_id) DO UPDATE SET
+			last_operation_id = excluded.last_operation_id,
+			last_sync_time = excluded.last_sync_time,
+			operations_sent = sync_state.operations_sent + excluded.operations_sent,
+			operations_received = sync_state.operations_received + excluded.operations_received
+	`, peerID, state.LastOperationID, state.LastSyncTime, state.OperationsSent, state.OperationsReceived)
+
+	if err != nil {
+		return fmt.Errorf("failed to update sync state: %w", err)
+	}
+
+	return tx.Commit()
 }
 
 func (s *Storage) Close() error {

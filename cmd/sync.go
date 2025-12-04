@@ -2,7 +2,9 @@ package main
 
 import (
 	"fmt"
+	"time"
 
+	"github.com/akr411/doit/internal/sync"
 	"github.com/akr411/doit/internal/ui"
 	"github.com/spf13/cobra"
 )
@@ -154,10 +156,198 @@ var statusCmd = &cobra.Command{
 	},
 }
 
+func runSyncInit(cmd *cobra.Command, args []string) error {
+	var syncEnabled string
+	err := store.GetDB().QueryRow("SELECT value FROM config WHERE key='sync_enabled'").Scan(&syncEnabled)
+	if err == nil && syncEnabled == "true" {
+		ui.PrintWarning("Sync already enabled")
+		return nil
+	}
+
+	_, err = store.GetDB().Exec("INSERT OR REPLACE INTO config (key, value) VALUES ('sync_enabled', 'true')")
+	if err != nil {
+		return fmt.Errorf("failed to enable sync: %w", err)
+	}
+
+	var err2 error
+	syncEngine, err2 = sync.NewSyncEngine(store)
+	if err2 != nil {
+		return fmt.Errorf("failed to create sync engine: %w", err2)
+	}
+
+	if err := syncEngine.Start(); err != nil {
+		return fmt.Errorf("failed to start sync engine: %w", err)
+	}
+
+	deviceName := sync.GetDeviceName()
+	port := sync.GetSyncPort(store.GetDB())
+
+	ui.PrintSuccess("✓ Sync enabled")
+	fmt.Printf("Device: %s\n", deviceName)
+	fmt.Printf("Listening on port: %d\n", port)
+
+	return nil
+}
+
+func runSyncStart(cmd *cobra.Command, args []string) error {
+	if syncEngine != nil && syncEngine.IsRunning() {
+		ui.PrintWarning("Sync engine already running")
+		return nil
+	}
+
+	var syncEnabled string
+	err := store.GetDB().QueryRow("SELECT value FROM config WHERE key='sync_enabled'").Scan(&syncEnabled)
+	if err != nil || syncEnabled != "true" {
+		return fmt.Errorf("sync not enabled. Run: doit sync init")
+	}
+
+	var err2 error
+	syncEngine, err2 = sync.NewSyncEngine(store)
+	if err2 != nil {
+		return fmt.Errorf("failed to create sync engine: %w", err2)
+	}
+
+	if err := syncEngine.Start(); err != nil {
+		return fmt.Errorf("failed to start sync engine: %w", err)
+	}
+
+	ui.PrintSuccess("✓ Sync engine started")
+	return nil
+}
+
+func runSyncStop(cmd *cobra.Command, args []string) error {
+	if syncEngine == nil || !syncEngine.IsRunning() {
+		ui.PrintWarning("Sync engine not running")
+		return nil
+	}
+
+	if err := syncEngine.Stop(); err != nil {
+		return fmt.Errorf("failed to stop sync engine: %w", err)
+	}
+
+	ui.PrintSuccess("✓ Sync engine stopped")
+	return nil
+}
+
+func runSyncDisable(cmd *cobra.Command, args []string) error {
+	if syncEngine != nil && syncEngine.IsRunning() {
+		if err := syncEngine.Stop(); err != nil {
+			return fmt.Errorf("failed to stop sync engine: %w", err)
+		}
+	}
+
+	_, err := store.GetDB().Exec("INSERT OR REPLACE INTO config (key, value) VALUES ('sync_enabled', 'false')")
+	if err != nil {
+		return fmt.Errorf("failed to disable sync: %w", err)
+	}
+
+	ui.PrintSuccess("✓ Sync disabled")
+	return nil
+}
+
+func runSyncDevices(cmd *cobra.Command, args []string) error {
+	var syncEnabled string
+	err := store.GetDB().QueryRow("SELECT value FROM config WHERE key='sync_enabled'").Scan(&syncEnabled)
+	if err != nil || syncEnabled != "true" {
+		return fmt.Errorf("sync not enabled. Run: doit sync init")
+	}
+
+	peers, err := store.GetPeers()
+	if err != nil {
+		return fmt.Errorf("failed to get peers: %w", err)
+	}
+
+	if len(peers) == 0 {
+		fmt.Println("No devices discovered yet")
+		return nil
+	}
+
+	fmt.Printf("%-36s %-20s %-25s %-15s\n", "ID", "Name", "Address", "Status")
+	fmt.Println("────────────────────────────────────────────────────────────────────────────────────────────")
+
+	for _, peer := range peers {
+		lastSeen := time.Unix(0, peer.LastSeen)
+		timeSince := time.Since(lastSeen)
+		timeStr := ""
+
+		if timeSince < time.Minute {
+			timeStr = fmt.Sprintf("(%ds ago)", int(timeSince.Seconds()))
+		} else if timeSince < time.Hour {
+			timeStr = fmt.Sprintf("(%dm ago)", int(timeSince.Minutes()))
+		} else if timeSince < 24*time.Hour {
+			timeStr = fmt.Sprintf("(%dh ago)", int(timeSince.Hours()))
+		} else {
+			timeStr = fmt.Sprintf("(%dd ago)", int(timeSince.Hours()/24))
+		}
+
+		fmt.Printf("%-36s %-20s %-25s %-15s %s\n",
+			peer.ID[:8]+"...", peer.Name, peer.Address, peer.Status, timeStr)
+
+		syncState, err := store.GetSyncState(peer.ID)
+		if err == nil && syncState.LastSyncTime > 0 {
+			lastSync := time.Unix(0, syncState.LastSyncTime)
+			syncTime := time.Since(lastSync)
+			syncTimeStr := ""
+			if syncTime < time.Minute {
+				syncTimeStr = fmt.Sprintf("%ds ago", int(syncTime.Seconds()))
+			} else if syncTime < time.Hour {
+				syncTimeStr = fmt.Sprintf("%dm ago", int(syncTime.Minutes()))
+			} else {
+				syncTimeStr = fmt.Sprintf("%dh ago", int(syncTime.Hours()))
+			}
+
+			fmt.Printf("  Last sync: %s | Sent: %d ops | Received: %d ops\n",
+				syncTimeStr, syncState.OperationsSent, syncState.OperationsReceived)
+		}
+	}
+
+	return nil
+}
+
+var initCmd = &cobra.Command{
+	Use:   "init",
+	Short: "Enable sync and start sync engine",
+	Long:  "Enable P2P synchronization and start the sync engine",
+	RunE:  runSyncInit,
+}
+
+var startCmd = &cobra.Command{
+	Use:   "start",
+	Short: "Start sync engine",
+	Long:  "Manually start the sync engine if sync is enabled",
+	RunE:  runSyncStart,
+}
+
+var stopCmd = &cobra.Command{
+	Use:   "stop",
+	Short: "Stop sync engine",
+	Long:  "Gracefully stop the sync engine",
+	RunE:  runSyncStop,
+}
+
+var disableCmd = &cobra.Command{
+	Use:   "disable",
+	Short: "Disable sync",
+	Long:  "Disable P2P synchronization and stop the sync engine",
+	RunE:  runSyncDisable,
+}
+
+var devicesCmd = &cobra.Command{
+	Use:   "devices",
+	Short: "List paired devices",
+	Long:  "Show all discovered and paired devices",
+	RunE:  runSyncDevices,
+}
+
 func init() {
 	rootCmd.AddCommand(syncCmd)
 	syncCmd.AddCommand(cleanupCmd)
 	syncCmd.AddCommand(statusCmd)
+	syncCmd.AddCommand(initCmd)
+	syncCmd.AddCommand(startCmd)
+	syncCmd.AddCommand(stopCmd)
+	syncCmd.AddCommand(disableCmd)
+	syncCmd.AddCommand(devicesCmd)
 
 	cleanupCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show what would be deleted without deleting")
 	cleanupCmd.Flags().BoolVar(&aggressive, "aggressive", false, "Delete all synced data ignoring retention periods (DANGEROUS)")
