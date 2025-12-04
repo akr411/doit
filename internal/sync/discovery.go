@@ -1,26 +1,29 @@
 package sync
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"log"
 	"sync"
 	"time"
 
-	"github.com/hashicorp/mdns"
+	"github.com/brutella/dnssd"
 )
 
 const (
-	ServiceName = "_doit._tcp"
-	MDNSTimeout = 3 * time.Second
+	ServiceType = "_doit._tcp"
 )
 
 type DiscoveryService struct {
-	server  *mdns.Server
-	store   StorageInterface
-	stopCh  chan struct{}
-	mu      sync.Mutex
-	running bool
+	responder dnssd.Responder
+	handle    dnssd.ServiceHandle
+	ctx       context.Context
+	cancel    context.CancelFunc
+	store     StorageInterface
+	stopCh    chan struct{}
+	mu        sync.Mutex
+	running   bool
 }
 
 type StorageInterface interface {
@@ -46,38 +49,54 @@ func (d *DiscoveryService) Start(port int) error {
 
 	deviceID, err := GetDeviceID(d.store.GetDB())
 	if err != nil {
+		d.running = false
 		return fmt.Errorf("failed to get device ID: %w", err)
 	}
 
 	deviceName := GetDeviceName()
 
-	service, err := mdns.NewMDNSService(
-		deviceName,
-		ServiceName,
-		"",
-		"",
-		port,
-		nil,
-		[]string{
-			"v=1",
-			"device_id=" + deviceID,
-			"name=" + deviceName,
+	cfg := dnssd.Config{
+		Name: deviceName,
+		Type: ServiceType,
+		Port: port,
+		Text: map[string]string{
+			"v":         "1",
+			"device_id": deviceID,
+			"name":      deviceName,
 		},
-	)
+	}
+
+	sv, err := dnssd.NewService(cfg)
 	if err != nil {
 		d.running = false
 		return fmt.Errorf("failed to create mDNS service: %w", err)
 	}
 
-	server, err := mdns.NewServer(&mdns.Config{Zone: service})
+	rp, err := dnssd.NewResponder()
 	if err != nil {
 		d.running = false
-		return fmt.Errorf("failed to create mDNS server: %w", err)
+		return fmt.Errorf("failed to create mDNS responder: %w", err)
 	}
 
-	d.server = server
+	hdl, err := rp.Add(sv)
+	if err != nil {
+		d.running = false
+		return fmt.Errorf("failed to add service: %w", err)
+	}
+
+	d.responder = rp
+	d.handle = hdl
+	d.ctx, d.cancel = context.WithCancel(context.Background())
+
+	go func() {
+		if err := rp.Respond(d.ctx); err != nil && err != context.Canceled {
+			log.Printf("mDNS responder error: %v", err)
+		}
+	}()
 
 	go d.discoveryLoop()
+
+	log.Printf("[INFO] mDNS service announced: %s on port %d", deviceName, port)
 
 	return nil
 }
@@ -91,12 +110,14 @@ func (d *DiscoveryService) Stop() error {
 	d.running = false
 	d.mu.Unlock()
 
-	close(d.stopCh)
+	select {
+	case <-d.stopCh:
+	default:
+		close(d.stopCh)
+	}
 
-	if d.server != nil {
-		if err := d.server.Shutdown(); err != nil {
-			return fmt.Errorf("failed to shutdown mDNS server: %w", err)
-		}
+	if d.cancel != nil {
+		d.cancel()
 	}
 
 	return nil
@@ -119,65 +140,72 @@ func (d *DiscoveryService) discoveryLoop() {
 }
 
 func (d *DiscoveryService) discover() {
-	entriesCh := make(chan *mdns.ServiceEntry, 10)
-
 	ourID, err := GetDeviceID(d.store.GetDB())
 	if err != nil {
 		log.Printf("Failed to get device ID: %v", err)
 		return
 	}
 
-	go func() {
-		for entry := range entriesCh {
-			deviceID := extractDeviceID(entry.InfoFields)
-			if deviceID == "" {
-				continue
-			}
+	log.Printf("[DEBUG] Discovery starting: ourID=%s", ourID)
+	entriesFound := 0
 
-			if deviceID == ourID {
-				continue
-			}
+	addFunc := func(entry dnssd.BrowseEntry) {
+		entriesFound++
+		log.Printf("[DEBUG] Entry #%d: Name=%s, IPs=%v, Port=%d, Text=%v",
+			entriesFound, entry.Name, entry.IPs, entry.Port, entry.Text)
 
-			peer := &Peer{
-				ID:        deviceID,
-				Name:      extractDeviceName(entry.InfoFields),
-				Address:   fmt.Sprintf("%s:%d", entry.AddrV4.String(), entry.Port),
-				LastSeen:  time.Now().UnixNano(),
-				Status:    "discovered",
-				CreatedAt: time.Now().UnixNano(),
-			}
-
-			if err := d.store.AddOrUpdatePeer(peer); err != nil {
-				log.Printf("Failed to add/update peer %s: %v", peer.Name, err)
-			}
+		deviceID, ok := entry.Text["device_id"]
+		if !ok || deviceID == "" {
+			log.Printf("[WARN] Empty or missing device_id in TXT, skipping entry %s", entry.Name)
+			return
 		}
-	}()
 
-	params := mdns.DefaultParams(ServiceName)
-	params.Timeout = MDNSTimeout
-	params.Entries = entriesCh
+		log.Printf("[DEBUG] Extracted deviceID='%s'", deviceID)
 
-	if err := mdns.Query(params); err != nil {
-		log.Printf("mDNS query failed: %v", err)
-	}
-
-	close(entriesCh)
-}
-
-func extractDeviceID(infoFields []string) string {
-	for _, field := range infoFields {
-		if len(field) > 10 && field[:10] == "device_id=" {
-			return field[10:]
+		if deviceID == ourID {
+			log.Printf("[DEBUG] Self-discovery (deviceID=%s), skipping", deviceID)
+			return
 		}
-	}
-	return ""
-}
 
-func extractDeviceName(infoFields []string) string {
-	for _, field := range infoFields {
-		if len(field) > 5 && field[:5] == "name=" {
-			return field[5:]
+		if len(entry.IPs) == 0 {
+			log.Printf("[WARN] No IPs for peer %s", entry.Name)
+			return
+		}
+
+		addr := entry.IPs[0].String()
+		deviceName, ok := entry.Text["name"]
+		if !ok {
+			deviceName = entry.Name
+		}
+
+		peer := &Peer{
+			ID:        deviceID,
+			Name:      deviceName,
+			Address:   fmt.Sprintf("%s:%d", addr, entry.Port),
+			LastSeen:  time.Now().UnixNano(),
+			Status:    "discovered",
+			CreatedAt: time.Now().UnixNano(),
+		}
+
+		log.Printf("[DEBUG] Adding peer: ID=%s, Name=%s, Address=%s", peer.ID, peer.Name, peer.Address)
+
+		if err := d.store.AddOrUpdatePeer(peer); err != nil {
+			log.Printf("Failed to add/update peer %s: %v", peer.Name, err)
+		} else {
+			log.Printf("[INFO] Successfully discovered peer: %s (%s)", peer.Name, peer.Address)
 		}
 	}
-	return "unknown"
+
+	rmvFunc := func(entry dnssd.BrowseEntry) {
+		log.Printf("[INFO] Peer disappeared: %s", entry.Name)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := dnssd.LookupType(ctx, ServiceType, addFunc, rmvFunc); err != nil {
+		log.Printf("mDNS lookup failed: %v", err)
+	}
+
+	log.Printf("[DEBUG] Discovery complete: processed %d entries", entriesFound)
 }
