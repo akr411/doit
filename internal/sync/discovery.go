@@ -1,18 +1,20 @@
 package sync
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
+	"log"
 	"net"
 	"sync"
 	"time"
 
 	"github.com/hashicorp/mdns"
+	"github.com/libp2p/zeroconf/v2"
 )
 
 const (
 	ServiceName = "_doit._tcp"
-	MDNSTimeout = 3 * time.Second
 )
 
 type DiscoveryService struct {
@@ -46,6 +48,7 @@ func (d *DiscoveryService) Start(port int) error {
 
 	deviceID, err := GetDeviceID(d.store.GetDB())
 	if err != nil {
+		d.running = false
 		return fmt.Errorf("failed to get device ID: %w", err)
 	}
 
@@ -83,8 +86,9 @@ func (d *DiscoveryService) Start(port int) error {
 	}
 
 	d.server = server
-
 	go d.discoveryLoop()
+
+	log.Printf("[INFO] mDNS service announced: %s on port %d", instanceName, port)
 
 	return nil
 }
@@ -125,6 +129,83 @@ func (d *DiscoveryService) discoveryLoop() {
 	}
 }
 
+func (d *DiscoveryService) discover() {
+	ourID, err := GetDeviceID(d.store.GetDB())
+	if err != nil {
+		log.Printf("Failed to get device ID: %v", err)
+		return
+	}
+
+	log.Printf("[DEBUG] Discovery starting: ourID=%s", ourID)
+
+	entries := make(chan *zeroconf.ServiceEntry)
+
+	go func() {
+		for entry := range entries {
+			log.Printf("[DEBUG] Found: %s at %v:%d, TXT=%v", entry.Instance, entry.AddrIPv4, entry.Port, entry.Text)
+
+			deviceID := extractFromText(entry.Text, "device_id")
+			if deviceID == "" {
+				log.Printf("[WARN] Empty device_id, skipping")
+				continue
+			}
+
+			if deviceID == ourID {
+				log.Printf("[DEBUG] Self-discovery, skipping")
+				continue
+			}
+
+			if len(entry.AddrIPv4) == 0 {
+				log.Printf("[WARN] No IPv4 address for %s", entry.Instance)
+				continue
+			}
+
+			deviceName := extractFromText(entry.Text, "name")
+			if deviceName == "" {
+				deviceName = entry.Instance
+			}
+
+			peer := &Peer{
+				ID:        deviceID,
+				Name:      deviceName,
+				Address:   fmt.Sprintf("%s:%d", entry.AddrIPv4[0].String(), entry.Port),
+				LastSeen:  time.Now().UnixNano(),
+				Status:    "discovered",
+				CreatedAt: time.Now().UnixNano(),
+			}
+
+			log.Printf("[DEBUG] Adding peer: %s (%s)", peer.Name, peer.Address)
+
+			if err := d.store.AddOrUpdatePeer(peer); err != nil {
+				log.Printf("Failed to add peer: %v", err)
+			} else {
+				log.Printf("[INFO] Discovered peer: %s (%s)", peer.Name, peer.Address)
+			}
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	if err := zeroconf.Browse(ctx, ServiceName, "local.", entries); err != nil {
+		log.Printf("Browse failed: %v", err)
+	}
+
+	<-ctx.Done()
+
+	log.Printf("[DEBUG] Discovery complete")
+}
+
+func extractFromText(text []string, key string) string {
+	prefix := key + "="
+	for _, field := range text {
+		if len(field) > len(prefix) && field[:len(prefix)] == prefix {
+			return field[len(prefix):]
+		}
+	}
+	return ""
+}
+
 func getLocalIPs() ([]net.IP, error) {
 	var ips []net.IP
 
@@ -147,4 +228,3 @@ func getLocalIPs() ([]net.IP, error) {
 
 	return ips, nil
 }
-
