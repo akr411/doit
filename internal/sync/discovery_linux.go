@@ -164,53 +164,55 @@ func (d *DiscoveryService) discover() {
 		case svc := <-sb.AddChannel:
 			log.Printf("[DEBUG] Service found: %s (type=%s)", svc.Name, svc.Type)
 
-			sr, err := server.ServiceResolverNew(svc.Interface, svc.Protocol, svc.Name, svc.Type, svc.Domain, avahi.ProtoUnspec, 0)
-			if err != nil {
-				log.Printf("Failed to create resolver: %v", err)
-				continue
-			}
-
-			select {
-			case resolved := <-sr.FoundChannel:
-				log.Printf("[DEBUG] Resolved: %s at %s:%d, TXT=%v", resolved.Name, resolved.Address, resolved.Port, resolved.Txt)
-
-				txt := bytesToStrings(resolved.Txt)
-				deviceID := extractFromTxt(txt, "device_id")
-				if deviceID == "" {
-					log.Printf("[WARN] Empty device_id in TXT, skipping")
-					continue
+			go func(s avahi.Service) {
+				sr, err := server.ServiceResolverNew(s.Interface, s.Protocol, s.Name, s.Type, s.Domain, avahi.ProtoUnspec, 0)
+				if err != nil {
+					log.Printf("Failed to create resolver: %v", err)
+					return
 				}
 
-				if deviceID == ourID {
-					log.Printf("[DEBUG] Self-discovery, skipping")
-					continue
+				select {
+				case resolved := <-sr.FoundChannel:
+					log.Printf("[DEBUG] Resolved: %s at %s:%d, TXT=%v", resolved.Name, resolved.Address, resolved.Port, resolved.Txt)
+
+					txt := bytesToStrings(resolved.Txt)
+					deviceID := extractFromTxt(txt, "device_id")
+					if deviceID == "" {
+						log.Printf("[WARN] Empty device_id in TXT, skipping")
+						return
+					}
+
+					if deviceID == ourID {
+						log.Printf("[DEBUG] Self-discovery, skipping")
+						return
+					}
+
+					deviceName := extractFromTxt(txt, "name")
+					if deviceName == "" {
+						deviceName = resolved.Name
+					}
+
+					peer := &Peer{
+						ID:        deviceID,
+						Name:      deviceName,
+						Address:   fmt.Sprintf("%s:%d", resolved.Address, resolved.Port),
+						LastSeen:  time.Now().UnixNano(),
+						Status:    "discovered",
+						CreatedAt: time.Now().UnixNano(),
+					}
+
+					log.Printf("[DEBUG] Adding peer: %s (%s)", peer.Name, peer.Address)
+
+					if err := d.store.AddOrUpdatePeer(peer); err != nil {
+						log.Printf("Failed to add peer: %v", err)
+					} else {
+						log.Printf("[INFO] Discovered peer: %s (%s)", peer.Name, peer.Address)
+					}
+
+				case <-time.After(2 * time.Second):
+					log.Printf("[WARN] Resolver timeout for %s", s.Name)
 				}
-
-				deviceName := extractFromTxt(txt, "name")
-				if deviceName == "" {
-					deviceName = resolved.Name
-				}
-
-				peer := &Peer{
-					ID:        deviceID,
-					Name:      deviceName,
-					Address:   fmt.Sprintf("%s:%d", resolved.Address, resolved.Port),
-					LastSeen:  time.Now().UnixNano(),
-					Status:    "discovered",
-					CreatedAt: time.Now().UnixNano(),
-				}
-
-				log.Printf("[DEBUG] Adding peer: %s (%s)", peer.Name, peer.Address)
-
-				if err := d.store.AddOrUpdatePeer(peer); err != nil {
-					log.Printf("Failed to add peer: %v", err)
-				} else {
-					log.Printf("[INFO] Discovered peer: %s (%s)", peer.Name, peer.Address)
-				}
-
-			case <-time.After(2 * time.Second):
-				log.Printf("[WARN] Resolver timeout for %s", svc.Name)
-			}
+			}(svc)
 
 		case svc := <-sb.RemoveChannel:
 			log.Printf("[INFO] Service disappeared: %s", svc.Name)
