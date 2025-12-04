@@ -18,11 +18,15 @@ const (
 
 type LocalDiscoveryStore interface {
 	GetDB() *sql.DB
+}
+
+type LocalDiscoveryPeerManager interface {
 	AddOrUpdatePeer(peer *Peer) error
 }
 
 type LocalDiscovery struct {
 	store   LocalDiscoveryStore
+	peerMgr LocalDiscoveryPeerManager
 	port    int
 	conn4   *net.UDPConn
 	conn6   *net.UDPConn
@@ -38,10 +42,11 @@ type AnnouncementPacket struct {
 	Name     string
 }
 
-func NewLocalDiscovery(store LocalDiscoveryStore) *LocalDiscovery {
+func NewLocalDiscovery(store LocalDiscoveryStore, peerMgr LocalDiscoveryPeerManager) *LocalDiscovery {
 	return &LocalDiscovery{
-		store:  store,
-		stopCh: make(chan struct{}),
+		store:   store,
+		peerMgr: peerMgr,
+		stopCh:  make(chan struct{}),
 	}
 }
 
@@ -248,7 +253,7 @@ func (ld *LocalDiscovery) processPacket(data []byte, srcIP net.IP, ourID string)
 		CreatedAt: time.Now().UnixNano(),
 	}
 
-	if err := ld.store.AddOrUpdatePeer(peer); err != nil {
+	if err := ld.peerMgr.AddOrUpdatePeer(peer); err != nil {
 		log.Printf("Failed to add peer: %v", err)
 	} else {
 		log.Printf("[INFO] Discovered peer: %s (%s)", peer.Name, peer.Address)

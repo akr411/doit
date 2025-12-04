@@ -23,7 +23,7 @@ type SyncEngine struct {
 func NewSyncEngine(store *storage.Storage) (*SyncEngine, error) {
 	peerMgr := NewPeerManager(store)
 
-	discovery := NewLocalDiscovery(store)
+	discovery := NewLocalDiscovery(store, peerMgr)
 
 	server, err := NewSyncServer(store, peerMgr)
 	if err != nil {
@@ -125,7 +125,10 @@ func (se *SyncEngine) syncLoop() {
 func (se *SyncEngine) syncWithAllPeers() {
 	peers := se.peerMgr.GetActivePeersList()
 
+	log.Printf("[DEBUG] Sync loop: found %d active peers", len(peers))
+
 	for _, peer := range peers {
+		log.Printf("[DEBUG] Attempting sync with %s (%s)", peer.Name, peer.Address)
 		go se.syncWithPeer(peer)
 	}
 }
