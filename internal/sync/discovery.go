@@ -51,7 +51,7 @@ func (d *DiscoveryService) Start(port int) error {
 	deviceName := GetDeviceName()
 
 	service, err := mdns.NewMDNSService(
-		deviceName,
+		"",
 		ServiceName,
 		"",
 		"",
