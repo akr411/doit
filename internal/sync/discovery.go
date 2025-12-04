@@ -259,6 +259,10 @@ func getActiveInterfaces() ([]net.Interface, error) {
 		if shouldSkipInterface(iface.Name) {
 			continue
 		}
+		if !hasValidIPv4(iface) {
+			continue
+		}
+		log.Printf("[DEBUG] Using interface: %s", iface.Name)
 		active = append(active, iface)
 	}
 
@@ -267,6 +271,22 @@ func getActiveInterfaces() ([]net.Interface, error) {
 	}
 
 	return active, nil
+}
+
+func hasValidIPv4(iface net.Interface) bool {
+	addrs, err := iface.Addrs()
+	if err != nil {
+		return false
+	}
+
+	for _, addr := range addrs {
+		if ipnet, ok := addr.(*net.IPNet); ok {
+			if ipnet.IP.To4() != nil && !ipnet.IP.IsLoopback() {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func shouldSkipInterface(name string) bool {
