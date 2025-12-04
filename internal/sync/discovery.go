@@ -186,8 +186,16 @@ func (d *DiscoveryService) discover() {
 		}
 	}()
 
-	if err := mdns.Lookup(ServiceName, entriesCh); err != nil {
-		log.Printf("Lookup failed: %v", err)
+	params := &mdns.QueryParam{
+		Service:     ServiceName,
+		Domain:      "local",
+		Timeout:     5 * time.Second,
+		Entries:     entriesCh,
+		DisableIPv6: true,
+	}
+
+	if err := mdns.Query(params); err != nil {
+		log.Printf("Query failed: %v", err)
 	}
 
 	close(entriesCh)
