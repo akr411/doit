@@ -138,6 +138,13 @@ func (d *DiscoveryService) discover() {
 
 	log.Printf("[DEBUG] Discovery starting: ourID=%s", ourID)
 
+	ifaces, err := getActiveInterfaces()
+	if err != nil {
+		log.Printf("[ERROR] Failed to get active interfaces: %v", err)
+		return
+	}
+	log.Printf("[DEBUG] Browsing on %d interface(s)", len(ifaces))
+
 	entries := make(chan *zeroconf.ServiceEntry)
 
 	go func() {
@@ -184,10 +191,13 @@ func (d *DiscoveryService) discover() {
 		}
 	}()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if err := zeroconf.Browse(ctx, ServiceName, "local.", entries); err != nil {
+	if err := zeroconf.Browse(ctx, ServiceName, "local.", entries,
+		zeroconf.SelectIfaces(ifaces),
+		zeroconf.SelectIPTraffic(zeroconf.IPv4),
+	); err != nil {
 		log.Printf("Browse failed: %v", err)
 	}
 
@@ -227,4 +237,28 @@ func getLocalIPs() ([]net.IP, error) {
 	}
 
 	return ips, nil
+}
+
+func getActiveInterfaces() ([]net.Interface, error) {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return nil, err
+	}
+
+	var active []net.Interface
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		if iface.Flags&net.FlagUp == 0 {
+			continue
+		}
+		active = append(active, iface)
+	}
+
+	if len(active) == 0 {
+		return nil, fmt.Errorf("no active network interfaces found")
+	}
+
+	return active, nil
 }

@@ -150,8 +150,12 @@ doit config retention 100    # 10, 25, 50, 100, 200, 500
 doit config streaks on       # on|off
 doit stats                   # Show streak stats
 
-# Sync commands (Phase 1.7+)
+# Sync commands (Phase 2+)
+doit sync init              # Enable sync (runs automatically during any command)
+doit sync disable           # Disable sync
 doit sync status            # Show sync and cleanup status
+doit sync devices           # List discovered devices
+doit sync daemon            # Run sync in foreground (for testing)
 doit sync cleanup           # Clean old operations and tombstones
 doit sync cleanup --dry-run # Preview what would be deleted
 doit sync cleanup --aggressive  # Force cleanup (with confirmation)
@@ -224,10 +228,11 @@ doit sync cleanup --aggressive # Nuclear option (asks for confirmation)
 - Lipgloss (styling)
 - Cobra (CLI framework)
 
-**Sync (Phase 1+):**
+**Sync (Phase 2+):**
 - CRDT (conflict resolution)
-- mDNS (LAN discovery)
-- STUN/WebRTC (internet sync)
+- mDNS (LAN discovery via hashicorp/mdns + libp2p/zeroconf/v2)
+- Auto-start: Sync runs automatically during any doit command
+- HTTP sync server with shared secret auth (port 49152)
 
 ---
 
@@ -294,7 +299,7 @@ All Phase 1 success criteria met:
 3. **HTTP Sync Server** - Endpoints: GET/POST /sync/operations, GET /sync/state
 4. **Sync Protocol** - Pull/push operations with exponential backoff retry
 5. **Sync Engine** - Background loop: discover (30s) + sync (10s)
-6. **CLI Integration** - Commands: init, start, stop, disable, devices
+6. **CLI Integration** - Commands: init, disable, devices, daemon
 </task_definition>
 
 **READ FIRST:** [PHASE2_MDNS_GUIDE.md](PHASE2_MDNS_GUIDE.md)
