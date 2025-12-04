@@ -113,7 +113,7 @@ func (ld *LocalDiscovery) Stop() error {
 }
 
 func (ld *LocalDiscovery) announceLoop() {
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 
 	ld.announce()

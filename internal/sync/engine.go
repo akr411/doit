@@ -109,7 +109,7 @@ func (se *SyncEngine) IsRunning() bool {
 }
 
 func (se *SyncEngine) syncLoop() {
-	ticker := time.NewTicker(10 * time.Second)
+	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
 
 	for {
