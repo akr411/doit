@@ -53,6 +53,12 @@ func (d *DiscoveryService) Start(port int) error {
 	deviceName := GetDeviceName()
 	instanceName := "doit-" + deviceID[:8]
 
+	ifaces, err := getActiveInterfaces()
+	if err != nil {
+		d.running = false
+		return fmt.Errorf("failed to get active interfaces: %w", err)
+	}
+
 	ips, err := getLocalIPs()
 	if err != nil {
 		d.running = false
@@ -77,7 +83,10 @@ func (d *DiscoveryService) Start(port int) error {
 		return fmt.Errorf("failed to create mDNS service: %w", err)
 	}
 
-	server, err := mdns.NewServer(&mdns.Config{Zone: service})
+	server, err := mdns.NewServer(&mdns.Config{
+		Zone:  service,
+		Iface: &ifaces[0],
+	})
 	if err != nil {
 		d.running = false
 		return fmt.Errorf("failed to create mDNS server: %w", err)
@@ -136,6 +145,12 @@ func (d *DiscoveryService) discover() {
 
 	log.Printf("[DEBUG] Discovery starting: ourID=%s", ourID)
 
+	ifaces, err := getActiveInterfaces()
+	if err != nil {
+		log.Printf("[ERROR] Failed to get active interfaces: %v", err)
+		return
+	}
+
 	entriesCh := make(chan *mdns.ServiceEntry, 10)
 
 	go func() {
@@ -187,6 +202,7 @@ func (d *DiscoveryService) discover() {
 		Service:             ServiceName,
 		Domain:              "local",
 		Timeout:             5 * time.Second,
+		Interface:           &ifaces[0],
 		Entries:             entriesCh,
 		WantUnicastResponse: false,
 	}
