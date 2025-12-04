@@ -11,7 +11,7 @@ import (
 
 type SyncEngine struct {
 	store     *storage.Storage
-	discovery *DiscoveryService
+	discovery *LocalDiscovery
 	server    *SyncServer
 	client    *SyncClient
 	peerMgr   *PeerManager
@@ -23,7 +23,7 @@ type SyncEngine struct {
 func NewSyncEngine(store *storage.Storage) (*SyncEngine, error) {
 	peerMgr := NewPeerManager(store)
 
-	discovery := NewDiscoveryService(store)
+	discovery := NewLocalDiscovery(store)
 
 	server, err := NewSyncServer(store, peerMgr)
 	if err != nil {
