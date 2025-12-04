@@ -3,6 +3,7 @@ package sync
 import (
 	"database/sql"
 	"fmt"
+	"net"
 	"sync"
 	"time"
 
@@ -51,13 +52,19 @@ func (d *DiscoveryService) Start(port int) error {
 	deviceName := GetDeviceName()
 	instanceName := "doit-" + deviceID[:8]
 
+	ips, err := getLocalIPs()
+	if err != nil {
+		d.running = false
+		return fmt.Errorf("failed to get local IPs: %w", err)
+	}
+
 	service, err := mdns.NewMDNSService(
 		instanceName,
 		ServiceName,
 		"",
 		"",
 		port,
-		nil,
+		ips,
 		[]string{
 			"v=1",
 			"device_id=" + deviceID,
@@ -116,5 +123,28 @@ func (d *DiscoveryService) discoveryLoop() {
 			return
 		}
 	}
+}
+
+func getLocalIPs() ([]net.IP, error) {
+	var ips []net.IP
+
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return nil, err
+	}
+
+	for _, addr := range addrs {
+		if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+			if ipnet.IP.To4() != nil {
+				ips = append(ips, ipnet.IP)
+			}
+		}
+	}
+
+	if len(ips) == 0 {
+		return nil, fmt.Errorf("no non-loopback IPv4 addresses found")
+	}
+
+	return ips, nil
 }
 
