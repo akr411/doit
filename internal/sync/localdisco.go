@@ -244,6 +244,10 @@ func (ld *LocalDiscovery) processPacket(data []byte, srcIP net.IP, ourID string)
 		return
 	}
 
+	if srcIP.IsLinkLocalUnicast() {
+		return
+	}
+
 	peer := &Peer{
 		ID:        packet.DeviceID,
 		Name:      packet.Name,
