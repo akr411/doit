@@ -1,17 +1,14 @@
 package sync
 
 import (
-	"context"
 	"database/sql"
 	"fmt"
 	"log"
 	"net"
-	"runtime"
 	"sync"
 	"time"
 
 	"github.com/hashicorp/mdns"
-	"github.com/libp2p/zeroconf/v2"
 )
 
 const (
@@ -139,13 +136,14 @@ func (d *DiscoveryService) discover() {
 
 	log.Printf("[DEBUG] Discovery starting: ourID=%s", ourID)
 
-	entries := make(chan *zeroconf.ServiceEntry)
+	entriesCh := make(chan *mdns.ServiceEntry, 10)
 
 	go func() {
-		for entry := range entries {
-			log.Printf("[DEBUG] Found: %s at %v:%d, TXT=%v", entry.Instance, entry.AddrIPv4, entry.Port, entry.Text)
+		for entry := range entriesCh {
+			log.Printf("[DEBUG] Found: %s at %v:%d, TXT=%v",
+				entry.Name, entry.AddrV4, entry.Port, entry.InfoFields)
 
-			deviceID := extractFromText(entry.Text, "device_id")
+			deviceID := extractFromInfo(entry.InfoFields, "device_id")
 			if deviceID == "" {
 				log.Printf("[WARN] Empty device_id, skipping")
 				continue
@@ -156,20 +154,20 @@ func (d *DiscoveryService) discover() {
 				continue
 			}
 
-			if len(entry.AddrIPv4) == 0 {
-				log.Printf("[WARN] No IPv4 address for %s", entry.Instance)
+			if entry.AddrV4 == nil {
+				log.Printf("[WARN] No IPv4 address for %s", entry.Name)
 				continue
 			}
 
-			deviceName := extractFromText(entry.Text, "name")
+			deviceName := extractFromInfo(entry.InfoFields, "name")
 			if deviceName == "" {
-				deviceName = entry.Instance
+				deviceName = entry.Name
 			}
 
 			peer := &Peer{
 				ID:        deviceID,
 				Name:      deviceName,
-				Address:   fmt.Sprintf("%s:%d", entry.AddrIPv4[0].String(), entry.Port),
+				Address:   fmt.Sprintf("%s:%d", entry.AddrV4.String(), entry.Port),
 				LastSeen:  time.Now().UnixNano(),
 				Status:    "discovered",
 				CreatedAt: time.Now().UnixNano(),
@@ -185,36 +183,26 @@ func (d *DiscoveryService) discover() {
 		}
 	}()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	var browseErr error
-	if runtime.GOOS == "linux" {
-		ifaces, ifaceErr := getActiveInterfaces()
-		if ifaceErr != nil {
-			log.Printf("[ERROR] Failed to get active interfaces: %v", ifaceErr)
-			return
-		}
-		log.Printf("[DEBUG] Linux: browsing on %d interface(s)", len(ifaces))
-		browseErr = zeroconf.Browse(ctx, ServiceName, "local.", entries,
-			zeroconf.SelectIfaces(ifaces))
-	} else {
-		log.Printf("[DEBUG] macOS/other: using default interface discovery")
-		browseErr = zeroconf.Browse(ctx, ServiceName, "local.", entries)
+	params := &mdns.QueryParam{
+		Service:             ServiceName,
+		Domain:              "local",
+		Timeout:             5 * time.Second,
+		Entries:             entriesCh,
+		WantUnicastResponse: false,
 	}
 
-	if browseErr != nil {
-		log.Printf("Browse failed: %v", browseErr)
+	if err := mdns.Query(params); err != nil {
+		log.Printf("Query failed: %v", err)
 	}
 
-	<-ctx.Done()
+	close(entriesCh)
 
 	log.Printf("[DEBUG] Discovery complete")
 }
 
-func extractFromText(text []string, key string) string {
+func extractFromInfo(fields []string, key string) string {
 	prefix := key + "="
-	for _, field := range text {
+	for _, field := range fields {
 		if len(field) > len(prefix) && field[:len(prefix)] == prefix {
 			return field[len(prefix):]
 		}
