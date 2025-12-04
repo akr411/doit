@@ -20,6 +20,7 @@ type SyncServer struct {
 	peerMgr *PeerManager
 	secret  string
 	errCh   chan error
+	port    int
 }
 
 type OperationsResponse struct {
@@ -85,6 +86,7 @@ func (ss *SyncServer) Start(port int) error {
 			continue
 		case <-time.After(100 * time.Millisecond):
 			ss.server = srv
+			ss.port = p
 			log.Printf("HTTP sync server started on port %d", p)
 			return nil
 		}
@@ -92,6 +94,10 @@ func (ss *SyncServer) Start(port int) error {
 
 	return fmt.Errorf("failed to start server on ports %d-%d: %w. Set custom port: doit config sync_port <port>",
 		ports[0], ports[len(ports)-1], lastErr)
+}
+
+func (ss *SyncServer) GetPort() int {
+	return ss.port
 }
 
 func (ss *SyncServer) Stop() error {

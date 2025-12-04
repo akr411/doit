@@ -60,15 +60,16 @@ func (se *SyncEngine) Start() error {
 
 	port := GetSyncPort(se.store.GetDB())
 
-	if err := se.discovery.Start(port); err != nil {
-		se.running = false
-		return fmt.Errorf("failed to start discovery: %w", err)
-	}
-
 	if err := se.server.Start(port); err != nil {
-		se.discovery.Stop()
 		se.running = false
 		return fmt.Errorf("failed to start server: %w", err)
+	}
+
+	actualPort := se.server.GetPort()
+	if err := se.discovery.Start(actualPort); err != nil {
+		se.server.Stop()
+		se.running = false
+		return fmt.Errorf("failed to start discovery: %w", err)
 	}
 
 	go se.syncLoop()
