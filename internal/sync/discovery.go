@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"runtime"
 	"sync"
 	"time"
 
@@ -187,8 +188,23 @@ func (d *DiscoveryService) discover() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if err := zeroconf.Browse(ctx, ServiceName, "local.", entries); err != nil {
-		log.Printf("Browse failed: %v", err)
+	var browseErr error
+	if runtime.GOOS == "linux" {
+		ifaces, ifaceErr := getActiveInterfaces()
+		if ifaceErr != nil {
+			log.Printf("[ERROR] Failed to get active interfaces: %v", ifaceErr)
+			return
+		}
+		log.Printf("[DEBUG] Linux: browsing on %d interface(s)", len(ifaces))
+		browseErr = zeroconf.Browse(ctx, ServiceName, "local.", entries,
+			zeroconf.SelectIfaces(ifaces))
+	} else {
+		log.Printf("[DEBUG] macOS/other: using default interface discovery")
+		browseErr = zeroconf.Browse(ctx, ServiceName, "local.", entries)
+	}
+
+	if browseErr != nil {
+		log.Printf("Browse failed: %v", browseErr)
 	}
 
 	<-ctx.Done()
