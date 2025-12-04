@@ -253,6 +253,9 @@ func getActiveInterfaces() ([]net.Interface, error) {
 		if iface.Flags&net.FlagUp == 0 {
 			continue
 		}
+		if iface.Flags&net.FlagRunning == 0 {
+			continue
+		}
 		active = append(active, iface)
 	}
 
