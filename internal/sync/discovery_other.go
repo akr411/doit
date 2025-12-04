@@ -11,8 +11,6 @@ import (
 	"github.com/hashicorp/mdns"
 )
 
-const MDNSTimeout = 3 * time.Second
-
 func (d *DiscoveryService) discover() {
 	ourID, err := GetDeviceID(d.store.GetDB())
 	if err != nil {
