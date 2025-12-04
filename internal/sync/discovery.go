@@ -138,13 +138,6 @@ func (d *DiscoveryService) discover() {
 
 	log.Printf("[DEBUG] Discovery starting: ourID=%s", ourID)
 
-	ifaces, err := getActiveInterfaces()
-	if err != nil {
-		log.Printf("[ERROR] Failed to get active interfaces: %v", err)
-		return
-	}
-	log.Printf("[DEBUG] Browsing on %d interface(s)", len(ifaces))
-
 	entries := make(chan *zeroconf.ServiceEntry)
 
 	go func() {
@@ -194,10 +187,7 @@ func (d *DiscoveryService) discover() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if err := zeroconf.Browse(ctx, ServiceName, "local.", entries,
-		zeroconf.SelectIfaces(ifaces),
-		zeroconf.SelectIPTraffic(zeroconf.IPv4),
-	); err != nil {
+	if err := zeroconf.Browse(ctx, ServiceName, "local.", entries); err != nil {
 		log.Printf("Browse failed: %v", err)
 	}
 
