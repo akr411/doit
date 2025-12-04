@@ -9,26 +9,24 @@ Personal todo CLI with P2P sync. No servers, works offline, syncs automatically.
 **Phase 0: TUI/CLI ✓ COMPLETE**
 **Phase 1: CRDT Foundation ✓ COMPLETE**
 **Phase 1.7: Data Retention ✓ COMPLETE**
-**Phase 2: Local Network Sync (mDNS) ✓ COMPLETE**
+**Phase 2: Local Network Sync (UDP Broadcast) ✓ COMPLETE**
 **Phase 3: Internet Sync (STUN/WebRTC) ← START NEXT**
 
 **IMPORTANT:** Track implementation progress in [TODO.md](TODO.md). Mark tasks complete [x] as you finish them.
 
 See [SYNC_ARCHITECTURE.md](SYNC_ARCHITECTURE.md) for detailed sync architecture and explanations.
 
-**Latest Updates (2025-12-04)**:
-- ✓ Phase 2 (mDNS Local Network Sync) COMPLETE
-- ✓ mDNS discovery fully implemented (hashicorp/mdns)
+**Latest Updates (2025-12-05)**:
+- ✓ Phase 2 (Local Network Sync) COMPLETE
+- ✓ Custom UDP broadcast discovery (no system dependencies, works on all platforms)
 - ✓ Peer management with state tracking (peers + sync_state tables)
 - ✓ HTTP sync server with shared secret authentication
 - ✓ Sync protocol with exponential backoff retry (1s→60s, max 2min)
 - ✓ Background sync engine (discovery: 30s, sync: 10s intervals)
-- ✓ CLI commands: init, start, stop, disable, devices
-- ✓ Critical fixes: sync loop prevention, port auto-increment, race conditions
-- ✓ Default port: 49152 (IANA dynamic/private range, was 8888)
+- ✓ CLI commands: init, disable, devices, daemon, status, cleanup
+- ✓ Discovery port: 49151 UDP, HTTP port: 49152 TCP
 - ✓ 5-minute peer timeout
-- ✓ All tests passing with race detector
-- Ready for two-device testing on same WiFi
+- ✓ Cross-platform tested (Linux ↔ macOS)
 
 ---
 
@@ -230,9 +228,10 @@ doit sync cleanup --aggressive # Nuclear option (asks for confirmation)
 
 **Sync (Phase 2+):**
 - CRDT (conflict resolution)
-- mDNS (LAN discovery via hashicorp/mdns + libp2p/zeroconf/v2)
+- UDP broadcast/multicast (LAN discovery, port 49151)
 - Auto-start: Sync runs automatically during any doit command
 - HTTP sync server with shared secret auth (port 49152)
+- No system dependencies (standalone binary)
 
 ---
 
@@ -286,72 +285,25 @@ All Phase 1 success criteria met:
 
 ---
 
-## 🚀 Next Steps: Phase 2 - Local Network Sync (mDNS)
+## ✅ Phase 2 Complete - Local Network Sync
 
-<task_definition>
-**Objective**: Implement automatic peer discovery and synchronization over local network (LAN/WiFi)
+**Implementation:**
+- Custom UDP broadcast/multicast discovery (port 49151)
+- No system dependencies (avahi/Bonjour not required)
+- Works identically on Linux + macOS
+- Inspired by Syncthing's local discovery protocol
 
-**Core Goal**: Two devices on same WiFi automatically discover and sync within 10 seconds, zero configuration
+**Key Features:**
+- Auto-discovery via UDP broadcast (IPv4) and multicast (IPv6)
+- Announces every 30 seconds
+- Custom packet format with device ID, port, name
+- No mDNS complexity or compatibility issues
 
-**Key Components**:
-1. **mDNS Discovery** - Broadcast/discover `_doit._tcp` service on LAN
-2. **Peer Management** - Track discovered devices (status, last_seen, sync_state)
-3. **HTTP Sync Server** - Endpoints: GET/POST /sync/operations, GET /sync/state
-4. **Sync Protocol** - Pull/push operations with exponential backoff retry
-5. **Sync Engine** - Background loop: discover (30s) + sync (10s)
-6. **CLI Integration** - Commands: init, disable, devices, daemon
-</task_definition>
-
-**READ FIRST:** [PHASE2_MDNS_GUIDE.md](PHASE2_MDNS_GUIDE.md)
-- Complete API documentation for hashicorp/mdns (ServiceEntry fields, Config options, etc.)
-- HTTP server/client best practices with production-ready code examples
-- Peer management patterns with complete state machine (discovered → connected → syncing → disconnected/failed)
-- Sync protocol flow with detailed request/response examples
-- 7 common pitfalls with wrong/correct code comparisons
-- Testing strategy with test skeletons
-
-**Key Sections Referenced:**
-- Decision 6: Authentication (shared secret pattern)
-- Decision 8: Database Schema (peers + sync_state tables)
-- Pattern 4: Sync Protocol Implementation (complete flow)
-- Pitfall 3: Avoid Sync Loops (operation ID tracking)
-
-**Implementation Tasks:** See [TODO.md](TODO.md) - Phase 2 section (6 subsections, ~40 tasks)
-
-**Implementation Order:** 2.1 → 2.2 → 2.3 → 2.4 → 2.5 → 2.6 (follow sequentially)
-
-**Prerequisites Met:**
-- ✓ Operation log working (Phase 1)
-- ✓ CRDT merge logic verified (Phase 1)
-- ✓ Device identity established (Phase 1)
-- ✓ Data retention prevents unbounded growth (Phase 1.7)
-- ✓ Timestamp consistency (nanosecond precision)
-- ✓ All tests passing with race detector
-
-<critical_implementation_notes>
-**MUST DO:**
-- Include device_id in mDNS TXT records for peer identification
-- Filter out self-discovery (skip our own device_id)
-- Use context.WithTimeout for all HTTP requests (30s max)
-- Auth: Shared secret in X-Doit-Secret header (see PHASE2_MDNS_GUIDE.md "Decision 6: Authentication")
-- Wrap all endpoints with auth middleware (except GET /sync/state which is used for handshake)
-- Use sync.RWMutex for concurrent peer map access
-- Transaction-wrap all database operations
-- Never block main goroutine (run server/discovery in goroutines)
-- Implement exponential backoff retry: 1s, 2s, 4s, 8s, 16s, 32s, 60s (max), 2min total duration
-- One peer failure must not stop syncing with others
-
-**MUST AVOID:**
-- Sync loops - track last_operation_id per peer (see PHASE2_MDNS_GUIDE.md "Pitfall 3")
-- Hanging requests - always use context.WithTimeout (30s max)
-- Channel leaks - always close(entriesCh) after mdns.Lookup
-- Sync storms - minimum 10s interval for sync loop
-- Race conditions - use mutexes for all shared state (peers map, running flag)
-
-**Operation Tracking:**
-- Use GetOperations(since_op_id) for sync protocol (primary method)
-- Use GetOperationsSince(timestamp) for cleanup/recovery only
-</critical_implementation_notes>
+**Files:**
+- `internal/sync/localdisco.go` - UDP discovery implementation
+- `internal/sync/server.go` - HTTP sync server (port 49152)
+- `internal/sync/protocol.go` - Sync protocol with retry
+- `internal/sync/engine.go` - Background sync orchestration
 
 ---
 
@@ -365,8 +317,6 @@ go get github.com/charmbracelet/lipgloss     # Styling (Phase 0)
 go get github.com/spf13/cobra                # CLI (Phase 0)
 go get github.com/google/uuid                # Device IDs (Phase 1)
 
-# Phase 2 (LAN Sync)
-go get github.com/hashicorp/mdns@v1.0.6      # mDNS discovery
 
 # Phase 3 (Internet Sync)
 go get github.com/pion/webrtc/v3             # WebRTC P2P

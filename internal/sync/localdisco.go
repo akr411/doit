@@ -158,9 +158,7 @@ func (ld *LocalDiscovery) announce() {
 	if ld.conn4 != nil {
 		_, err = ld.conn4.WriteToUDP(data, broadcastAddr)
 		if err != nil {
-			log.Printf("[ERROR] Failed to send IPv4 broadcast: %v", err)
-		} else {
-			log.Printf("[DEBUG] Sent announcement via IPv4 broadcast")
+			log.Printf("Failed to send IPv4 broadcast: %v", err)
 		}
 	}
 
@@ -171,9 +169,7 @@ func (ld *LocalDiscovery) announce() {
 		}
 		_, err = ld.conn6.WriteToUDP(data, multicastAddr)
 		if err != nil {
-			log.Printf("[ERROR] Failed to send IPv6 multicast: %v", err)
-		} else {
-			log.Printf("[DEBUG] Sent announcement via IPv6 multicast")
+			log.Printf("Failed to send IPv6 multicast: %v", err)
 		}
 	}
 }
@@ -225,14 +221,10 @@ func (ld *LocalDiscovery) receiveLoop() {
 func (ld *LocalDiscovery) processPacket(data []byte, srcIP net.IP, ourID string) {
 	packet, err := UnmarshalAnnouncement(data)
 	if err != nil {
-		log.Printf("[DEBUG] Failed to unmarshal packet from %s: %v", srcIP, err)
 		return
 	}
 
-	log.Printf("[DEBUG] Received packet from %s: DeviceID=%s, Port=%d, Name=%s", srcIP, packet.DeviceID, packet.Port, packet.Name)
-
 	if packet.DeviceID == ourID {
-		log.Printf("[DEBUG] Skipping self-announcement from %s", srcIP)
 		return
 	}
 
@@ -245,10 +237,8 @@ func (ld *LocalDiscovery) processPacket(data []byte, srcIP net.IP, ourID string)
 		CreatedAt: time.Now().UnixNano(),
 	}
 
-	log.Printf("[DEBUG] Discovered peer via UDP: %s (%s)", peer.Name, peer.Address)
-
 	if err := ld.store.AddOrUpdatePeer(peer); err != nil {
-		log.Printf("[ERROR] Failed to add peer: %v", err)
+		log.Printf("Failed to add peer: %v", err)
 	} else {
 		log.Printf("[INFO] Discovered peer: %s (%s)", peer.Name, peer.Address)
 	}
