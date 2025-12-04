@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net"
 	"os"
 
 	"github.com/akr411/doit/internal/storage"
@@ -53,7 +54,7 @@ func init() {
 		}
 	}
 
-	if sync.IsSyncEnabled(store.GetDB()) {
+	if sync.IsSyncEnabled(store.GetDB()) && !isDaemonRunning() {
 		syncEngine, err = sync.NewSyncEngine(store)
 		if err != nil {
 			ui.PrintWarning("Warning: failed to create sync engine: %v", err)
@@ -64,6 +65,15 @@ func init() {
 			}
 		}
 	}
+}
+
+func isDaemonRunning() bool {
+	conn, err := net.ListenUDP("udp4", &net.UDPAddr{Port: 49151})
+	if err != nil {
+		return true
+	}
+	conn.Close()
+	return false
 }
 
 func Execute() error {
