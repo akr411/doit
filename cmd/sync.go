@@ -304,6 +304,31 @@ func runSyncDevices(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+func runSyncDaemon(cmd *cobra.Command, args []string) error {
+	var syncEnabled string
+	err := store.GetDB().QueryRow("SELECT value FROM config WHERE key='sync_enabled'").Scan(&syncEnabled)
+	if err != nil || syncEnabled != "true" {
+		return fmt.Errorf("sync not enabled. Run: doit sync init")
+	}
+
+	if syncEngine == nil {
+		syncEngine, err = sync.NewSyncEngine(store)
+		if err != nil {
+			return fmt.Errorf("failed to create sync engine: %w", err)
+		}
+	}
+
+	if !syncEngine.IsRunning() {
+		if err := syncEngine.Start(); err != nil {
+			return fmt.Errorf("failed to start sync engine: %w", err)
+		}
+	}
+
+	ui.PrintSuccess("✓ Sync daemon running (Ctrl+C to stop)")
+
+	select {}
+}
+
 var initCmd = &cobra.Command{
 	Use:   "init",
 	Short: "Enable sync and start sync engine",
@@ -339,6 +364,13 @@ var devicesCmd = &cobra.Command{
 	RunE:  runSyncDevices,
 }
 
+var daemonCmd = &cobra.Command{
+	Use:   "daemon",
+	Short: "Run sync engine in foreground",
+	Long:  "Start sync engine and keep it running (for testing/development)",
+	RunE:  runSyncDaemon,
+}
+
 func init() {
 	rootCmd.AddCommand(syncCmd)
 	syncCmd.AddCommand(cleanupCmd)
@@ -348,6 +380,7 @@ func init() {
 	syncCmd.AddCommand(stopCmd)
 	syncCmd.AddCommand(disableCmd)
 	syncCmd.AddCommand(devicesCmd)
+	syncCmd.AddCommand(daemonCmd)
 
 	cleanupCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show what would be deleted without deleting")
 	cleanupCmd.Flags().BoolVar(&aggressive, "aggressive", false, "Delete all synced data ignoring retention periods (DANGEROUS)")
