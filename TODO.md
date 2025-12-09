@@ -14,7 +14,7 @@ All tasks completed and verified. See CLAUDE.md for success criteria.
 
 ## Phase 1: CRDT Foundation ✅ COMPLETE
 
-**Read First:** [PHASE1_CRDT_GUIDE.md](PHASE1_CRDT_GUIDE.md) for research, decisions, and implementation patterns
+**Read First:** [docs/PHASE1_CRDT_GUIDE.md](docs/PHASE1_CRDT_GUIDE.md) for research, decisions, and implementation patterns
 
 **Completed:** 2025-11-26
 
@@ -174,7 +174,7 @@ Integration:
 
 **Completed:** 2025-12-04
 
-**Read First:** [PHASE2_MDNS_GUIDE.md](PHASE2_MDNS_GUIDE.md) for research, API docs, patterns, and pitfalls
+**Read First:** [docs/PHASE2_MDNS_GUIDE.md](docs/PHASE2_MDNS_GUIDE.md) for research, API docs, patterns, and pitfalls
 
 ### 2.1 mDNS Discovery
 
@@ -233,7 +233,7 @@ Server Setup:
 - [x] Shutdown with 30s timeout: srv.Shutdown(ctx)
 - [x] Return server reference for later shutdown
 
-Endpoints (see PHASE2_MDNS_GUIDE.md for detailed examples):
+Endpoints (see docs/PHASE2_MDNS_GUIDE.md for detailed examples):
 - [x] GET /sync/operations?since=opID
   - Call store.GetOperations(since)
   - Convert to []*sync.Operation (not map[string]interface{})
@@ -535,7 +535,7 @@ Integration:
 
 ## Phase 4.5: Battle Testing (CRITICAL)
 
-See SYNC_ARCHITECTURE.md for detailed battle testing scenarios.
+See docs/SYNC_ARCHITECTURE.md for detailed battle testing scenarios.
 
 ### 4.5.1 Database Corruption & Recovery
 - [ ] Power loss recovery test
