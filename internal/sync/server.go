@@ -15,12 +15,15 @@ import (
 )
 
 type SyncServer struct {
-	server  *http.Server
-	store   *storage.Storage
-	peerMgr *PeerManager
-	secret  string
-	errCh   chan error
-	port    int
+	server     *http.Server
+	store      *storage.Storage
+	peerMgr    *PeerManager
+	pairingMgr *PairingManager
+	secret     string
+	deviceID   string
+	deviceName string
+	errCh      chan error
+	port       int
 }
 
 type OperationsResponse struct {
@@ -47,10 +50,21 @@ func NewSyncServer(store *storage.Storage, peerMgr *PeerManager) (*SyncServer, e
 		return nil, fmt.Errorf("failed to get/generate secret: %w", err)
 	}
 
+	deviceID, err := GetDeviceID(store.GetDB())
+	if err != nil {
+		return nil, fmt.Errorf("failed to get device ID: %w", err)
+	}
+
+	deviceName := GetDeviceName()
+	pairingMgr := NewPairingManager(store.GetDB(), secret)
+
 	return &SyncServer{
-		store:   store,
-		peerMgr: peerMgr,
-		secret:  secret,
+		store:      store,
+		peerMgr:    peerMgr,
+		pairingMgr: pairingMgr,
+		secret:     secret,
+		deviceID:   deviceID,
+		deviceName: deviceName,
 	}, nil
 }
 
@@ -59,6 +73,7 @@ func (ss *SyncServer) Start(port int) error {
 
 	mux.HandleFunc("/sync/operations", ss.authMiddleware(ss.handleOperations))
 	mux.HandleFunc("/sync/state", ss.handleGetState)
+	mux.HandleFunc("/sync/pair", ss.handlePair)
 
 	ports := []int{port, port + 1, port + 2}
 	ss.errCh = make(chan error, 1)
@@ -212,6 +227,50 @@ func (ss *SyncServer) handleGetState(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
+}
+
+func (ss *SyncServer) handlePair(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		PairingCode string `json:"pairing_code"`
+		DeviceID    string `json:"device_id"`
+		DeviceName  string `json:"device_name"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	valid, err := ss.pairingMgr.ValidateCode(req.PairingCode)
+	if err != nil || !valid {
+		log.Printf("Invalid pairing code from %s: %v", req.DeviceName, err)
+		http.Error(w, "Invalid or expired pairing code", http.StatusUnauthorized)
+		return
+	}
+
+	if err := ss.pairingMgr.MarkUsed(req.PairingCode); err != nil {
+		log.Printf("Failed to mark code used: %v", err)
+	}
+
+	response := struct {
+		SharedSecret string `json:"shared_secret"`
+		DeviceID     string `json:"device_id"`
+		DeviceName   string `json:"device_name"`
+	}{
+		SharedSecret: ss.secret,
+		DeviceID:     ss.deviceID,
+		DeviceName:   ss.deviceName,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+
+	log.Printf("[INFO] Paired with device: %s (%s)", req.DeviceName, req.DeviceID)
 }
 
 func getOrGenerateSecret(db *sql.DB) (string, error) {

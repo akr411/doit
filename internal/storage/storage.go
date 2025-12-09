@@ -152,6 +152,21 @@ func (s *Storage) createTables() error {
 		operations_received INTEGER DEFAULT 0,
 		FOREIGN KEY (peer_id) REFERENCES peers(id) ON DELETE CASCADE
 	);
+
+	CREATE TABLE IF NOT EXISTS peer_secrets (
+		peer_id TEXT PRIMARY KEY,
+		secret TEXT NOT NULL,
+		FOREIGN KEY (peer_id) REFERENCES peers(id) ON DELETE CASCADE
+	);
+
+	CREATE TABLE IF NOT EXISTS pairing_codes (
+		code TEXT PRIMARY KEY,
+		created_at INTEGER NOT NULL,
+		expires_at INTEGER NOT NULL,
+		used INTEGER DEFAULT 0
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_pairing_expires ON pairing_codes(expires_at);
 	`
 
 	if _, err := s.db.Exec(schema); err != nil {
@@ -869,6 +884,22 @@ func (s *Storage) UpdateSyncState(peerID string, state *SyncState) error {
 	}
 
 	return tx.Commit()
+}
+
+func (s *Storage) SavePeerSecret(peerID, secret string) error {
+	_, err := s.db.Exec(`
+		INSERT OR REPLACE INTO peer_secrets (peer_id, secret)
+		VALUES (?, ?)
+	`, peerID, secret)
+	return err
+}
+
+func (s *Storage) GetPeerSecret(peerID string) (string, error) {
+	var secret string
+	err := s.db.QueryRow(`
+		SELECT secret FROM peer_secrets WHERE peer_id = ?
+	`, peerID).Scan(&secret)
+	return secret, err
 }
 
 func (s *Storage) Close() error {
