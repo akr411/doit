@@ -2,18 +2,15 @@ package main
 
 import (
 	"fmt"
-	"net"
 	"os"
 
 	"github.com/akr411/doit/internal/storage"
-	"github.com/akr411/doit/internal/sync"
 	"github.com/akr411/doit/internal/ui"
 	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 )
 
 var store *storage.Storage
-var syncEngine *sync.SyncEngine
 var isTTY bool
 
 var rootCmd = &cobra.Command{
@@ -54,33 +51,8 @@ func init() {
 		}
 	}
 
-	if sync.IsSyncEnabled(store.GetDB()) && !isDaemonRunning() {
-		syncEngine, err = sync.NewSyncEngine(store)
-		if err != nil {
-			ui.PrintWarning("Warning: failed to create sync engine: %v", err)
-		} else {
-			err = syncEngine.Start()
-			if err != nil {
-				ui.PrintWarning("Warning: failed to start sync engine: %v", err)
-			}
-		}
-	}
-}
-
-func isDaemonRunning() bool {
-	conn, err := net.ListenUDP("udp4", &net.UDPAddr{Port: 49151})
-	if err != nil {
-		return true
-	}
-	conn.Close()
-	return false
 }
 
 func Execute() error {
-	defer func() {
-		if syncEngine != nil && syncEngine.IsRunning() {
-			syncEngine.Stop()
-		}
-	}()
 	return rootCmd.Execute()
 }
