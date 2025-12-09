@@ -39,7 +39,6 @@ type StateResponse struct {
 	LastOperationID string `json:"last_operation_id"`
 	DeviceID        string `json:"device_id"`
 	DeviceName      string `json:"device_name"`
-	SharedSecret    string `json:"shared_secret"`
 }
 
 func NewSyncServer(store *storage.Storage, peerMgr *PeerManager) (*SyncServer, error) {
@@ -209,7 +208,6 @@ func (ss *SyncServer) handleGetState(w http.ResponseWriter, r *http.Request) {
 		LastOperationID: lastOpID,
 		DeviceID:        deviceID,
 		DeviceName:      deviceName,
-		SharedSecret:    ss.secret,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

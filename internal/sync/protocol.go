@@ -33,7 +33,6 @@ type PeerState struct {
 	LastOperationID string `json:"last_operation_id"`
 	DeviceID        string `json:"device_id"`
 	DeviceName      string `json:"device_name"`
-	SharedSecret    string `json:"shared_secret"`
 }
 
 func NewSyncClient(store *storage.Storage) (*SyncClient, error) {
@@ -162,13 +161,15 @@ func (sc *SyncClient) PushOperations(peer *Peer, secret string, ops []Operation)
 }
 
 func (sc *SyncClient) InitialSync(peer *Peer) error {
+	// Get peer secret from database (must be paired first via `doit sync pair`)
+	secret, err := sc.store.GetPeerSecret(peer.ID)
+	if err != nil {
+		return fmt.Errorf("not paired with %s. Pair devices using 'doit sync show' and 'doit sync pair'", peer.Name)
+	}
+
 	peerState, err := sc.GetPeerState(peer)
 	if err != nil {
 		return fmt.Errorf("failed to get peer state: %w", err)
-	}
-
-	if err := sc.store.SavePeerSecret(peer.ID, peerState.SharedSecret); err != nil {
-		log.Printf("Failed to save peer secret: %v", err)
 	}
 
 	syncState, err := sc.store.GetSyncState(peer.ID)
@@ -181,7 +182,7 @@ func (sc *SyncClient) InitialSync(peer *Peer) error {
 		ourLastOpID = ""
 	}
 
-	newOps, err := sc.PullOperations(peer, peerState.SharedSecret, ourLastOpID)
+	newOps, err := sc.PullOperations(peer, secret, ourLastOpID)
 	if err != nil {
 		return fmt.Errorf("failed to pull operations: %w", err)
 	}
@@ -212,7 +213,7 @@ func (sc *SyncClient) InitialSync(peer *Peer) error {
 	}
 
 	if len(operations) > 0 {
-		if err := sc.PushOperations(peer, peerState.SharedSecret, operations); err != nil {
+		if err := sc.PushOperations(peer, secret, operations); err != nil {
 			log.Printf("Failed to push operations to %s: %v", peer.Name, err)
 		} else {
 			opIDs := make([]string, len(operations))
