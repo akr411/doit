@@ -42,7 +42,7 @@ Track: [TODO.md](TODO.md) | Architecture: [docs/SYNC_ARCHITECTURE.md](docs/SYNC_
 **Sync**:
 - CRDT with LWW conflict resolution
 - UDP broadcast discovery (port 49151)
-- HTTP sync server (port 49152)
+- HTTP sync server (port 49152) - **run via `doit sync daemon`**
 - Pairing code system (6-digit, 15min expiry, single-use)
 - Per-peer secrets (stored in peer_secrets table)
 
@@ -103,7 +103,9 @@ $ doit sync show
 $ doit sync pair 123-456
 ✓ Paired with Device A
 
-# Sync happens automatically every 10s
+# Run daemon on both devices for continuous sync
+$ doit sync daemon
+✓ Sync daemon running (syncs every 10s)
 ```
 
 ---
