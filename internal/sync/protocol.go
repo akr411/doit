@@ -27,26 +27,19 @@ var syncHTTPClient = &http.Client{
 type SyncClient struct {
 	client *http.Client
 	store  *storage.Storage
-	secret string
 }
 
 type PeerState struct {
 	LastOperationID string `json:"last_operation_id"`
 	DeviceID        string `json:"device_id"`
 	DeviceName      string `json:"device_name"`
+	SharedSecret    string `json:"shared_secret"`
 }
 
 func NewSyncClient(store *storage.Storage) (*SyncClient, error) {
-	var secret string
-	err := store.GetDB().QueryRow("SELECT value FROM config WHERE key='shared_secret'").Scan(&secret)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get shared secret: %w", err)
-	}
-
 	return &SyncClient{
 		client: syncHTTPClient,
 		store:  store,
-		secret: secret,
 	}, nil
 }
 
@@ -79,7 +72,7 @@ func (sc *SyncClient) GetPeerState(peer *Peer) (*PeerState, error) {
 	return &state, nil
 }
 
-func (sc *SyncClient) PullOperations(peer *Peer, since string) ([]Operation, error) {
+func (sc *SyncClient) PullOperations(peer *Peer, secret string, since string) ([]Operation, error) {
 	url := fmt.Sprintf("http://%s/sync/operations?since=%s", peer.Address, since)
 
 	var operations []Operation
@@ -92,7 +85,7 @@ func (sc *SyncClient) PullOperations(peer *Peer, since string) ([]Operation, err
 			return fmt.Errorf("failed to create request: %w", err)
 		}
 
-		req.Header.Set("X-Doit-Secret", sc.secret)
+		req.Header.Set("X-Doit-Secret", secret)
 
 		resp, err := sc.client.Do(req)
 		if err != nil {
@@ -124,7 +117,7 @@ func (sc *SyncClient) PullOperations(peer *Peer, since string) ([]Operation, err
 	return operations, nil
 }
 
-func (sc *SyncClient) PushOperations(peer *Peer, ops []Operation) error {
+func (sc *SyncClient) PushOperations(peer *Peer, secret string, ops []Operation) error {
 	if len(ops) == 0 {
 		return nil
 	}
@@ -147,7 +140,7 @@ func (sc *SyncClient) PushOperations(peer *Peer, ops []Operation) error {
 		}
 
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("X-Doit-Secret", sc.secret)
+		req.Header.Set("X-Doit-Secret", secret)
 
 		resp, err := sc.client.Do(req)
 		if err != nil {
@@ -174,6 +167,10 @@ func (sc *SyncClient) InitialSync(peer *Peer) error {
 		return fmt.Errorf("failed to get peer state: %w", err)
 	}
 
+	if err := sc.store.SavePeerSecret(peer.ID, peerState.SharedSecret); err != nil {
+		log.Printf("Failed to save peer secret: %v", err)
+	}
+
 	syncState, err := sc.store.GetSyncState(peer.ID)
 	if err != nil {
 		return fmt.Errorf("failed to get sync state: %w", err)
@@ -184,7 +181,7 @@ func (sc *SyncClient) InitialSync(peer *Peer) error {
 		ourLastOpID = ""
 	}
 
-	newOps, err := sc.PullOperations(peer, ourLastOpID)
+	newOps, err := sc.PullOperations(peer, peerState.SharedSecret, ourLastOpID)
 	if err != nil {
 		return fmt.Errorf("failed to pull operations: %w", err)
 	}
@@ -215,7 +212,7 @@ func (sc *SyncClient) InitialSync(peer *Peer) error {
 	}
 
 	if len(operations) > 0 {
-		if err := sc.PushOperations(peer, operations); err != nil {
+		if err := sc.PushOperations(peer, peerState.SharedSecret, operations); err != nil {
 			log.Printf("Failed to push operations to %s: %v", peer.Name, err)
 		} else {
 			opIDs := make([]string, len(operations))

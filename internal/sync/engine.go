@@ -125,10 +125,7 @@ func (se *SyncEngine) syncLoop() {
 func (se *SyncEngine) syncWithAllPeers() {
 	peers := se.peerMgr.GetActivePeersList()
 
-	log.Printf("[DEBUG] Sync loop: found %d active peers", len(peers))
-
 	for _, peer := range peers {
-		log.Printf("[DEBUG] Attempting sync with %s (%s)", peer.Name, peer.Address)
 		go se.syncWithPeer(peer)
 	}
 }
