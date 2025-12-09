@@ -8,7 +8,8 @@ No servers, works offline, syncs automatically.
 
 **Complete**: Phase 0 (TUI), Phase 1 (CRDT), Phase 2 (Local Sync + Pairing)
 **Security**: Pairing codes ✓, TLS encryption pending
-**Next**: Phase 3 - TLS + mTLS
+**Scope**: Local network only (WiFi/LAN)
+**Next**: Phase 3 - TLS encryption for public WiFi safety
 
 Track: [TODO.md](TODO.md) | Architecture: [docs/SYNC_ARCHITECTURE.md](docs/SYNC_ARCHITECTURE.md)
 
@@ -159,10 +160,6 @@ go get github.com/charmbracelet/bubbletea    # TUI
 go get github.com/charmbracelet/lipgloss     # Styling
 go get github.com/spf13/cobra                # CLI
 go get github.com/google/uuid                # Device IDs
-
-# Phase 3 (pending)
-go get github.com/pion/webrtc/v3             # WebRTC P2P
-go get github.com/pion/stun                  # NAT traversal
 ```
 
 ---

@@ -422,64 +422,66 @@ Notes:
 
 ---
 
-## Phase 3: Internet Sync (STUN/WebRTC)
+## Phase 3: TLS Encryption (Local Network Security)
 
-### 3.1 Pairing System
+**Scope**: Local network only (WiFi/LAN), TLS for public WiFi safety
 
-**File:** `internal/sync/device.go`
+### 3.1 Certificate Management
 
-- [ ] Generate Ed25519 keypair on first sync init, store in config table
-- [ ] GeneratePairingCode() - encode: device_id + public_key + local_addrs + public_addr(STUN) + timestamp + shared_secret
-- [ ] Format: base32 encoding, uppercase, no padding
-- [ ] DecodePairingCode(code) - validate timestamp (<15min from now) → return PairingInfo
-- [ ] ExchangePairingInfo(code) - decode → Connect(peer) → POST /sync/pair → AddPeer(response)
+**File:** `internal/sync/tls.go` (NEW)
 
-### 3.2 STUN Integration
+- [ ] Generate Ed25519 self-signed certificate on first sync init
+- [ ] Store cert + private key in config table (PEM format)
+- [ ] Calculate SHA256 fingerprint, store in config
+- [ ] GetTLSConfig(isServer bool) - returns tls.Config for server/client
+- [ ] GetFingerprint() - returns our cert fingerprint (for display)
+- [ ] SavePeerCertificate(peerID, fingerprint) - store peer cert fingerprint
+- [ ] VerifyPeerCertificate() - callback to verify peer cert matches stored fingerprint
 
-**File:** `internal/sync/stun.go`
+### 3.2 Database Schema
 
-- [ ] `go get github.com/pion/stun`
-- [ ] DiscoverPublicAddress() (string, error) - returns "ip:port"
-- [ ] STUN servers: stun.l.google.com:19302, stun1.l.google.com:19302, stun.cloudflare.com:3478
-- [ ] Query: send binding request, parse XOR-MAPPED-ADDRESS
-- [ ] Cache in memory (publicAddr string, lastCheck time.Time), refresh if age > 5min
-- [ ] Timeout: 5s per server, try next on timeout/error
+**File:** `internal/storage/storage.go`
 
-### 3.3 WebRTC Connections
+- [ ] Add to config table: tls_cert, tls_key, tls_fingerprint
+- [ ] Create peer_certificates table: device_id (PK), fingerprint, FOREIGN KEY to peers
 
-**File:** `internal/sync/webrtc.go`
+### 3.3 Update Server to HTTPS
 
-- [ ] `go get github.com/pion/webrtc/v3`
-- [ ] CreateWebRTCConnection(peer) - create connection, data channel, SDP offer/answer
-- [ ] Wait for connection state == "connected" (timeout 10s)
-- [ ] Keep-alive: send ping on data channel every 30s, close if no pong in 60s
+**File:** `internal/sync/server.go`
 
-### 3.4 Multi-Method Connection
+- [ ] Generate TLS cert on NewSyncServer() if not exists
+- [ ] Update Start() to use srv.ListenAndServeTLS()
+- [ ] Set TLSConfig with mTLS (ClientAuth: RequireAnyClientCert)
+- [ ] Set VerifyPeerCertificate callback
+- [ ] Log: "HTTPS sync server started on port X"
 
-**File:** `internal/sync/transport.go`
-
-- [ ] Connect(peer) - 3 parallel attempts: tryMDNS, tryDirect, trySTUN
-- [ ] Use context.WithCancel: first success cancels others, timeout 10s total
-- [ ] Connection interface: Read/Write/Close
-- [ ] Wrap HTTP conn OR WebRTC data channel
-- [ ] On failure: retry with exponential backoff
-
-### 3.5 Address Exchange
+### 3.4 Update Client to HTTPS
 
 **File:** `internal/sync/protocol.go`
 
-- [ ] POST /sync/pair endpoint - validate shared_secret, INSERT INTO peers, return our info
-- [ ] Address updates: when public IP changes, UPDATE peers SET addresses
-- [ ] Addresses stored as JSON array: ["192.168.1.10:49152", "73.45.198.123:49152"]
+- [ ] Update NewSyncClient() to create TLS transport
+- [ ] Set TLSClientConfig with cert verification
+- [ ] Change all URLs from http:// to https://
+- [ ] Update GetPeerState(), PullOperations(), PushOperations()
 
-### 3.6 CLI Commands
+### 3.5 Update Pairing to Exchange Certificates
 
 **File:** `cmd/sync.go`
 
-- [ ] `doit sync pair <code>` - pair with device
-- [ ] `doit sync show` - show my pairing code
-- [ ] `doit sync devices` - list paired devices
-- [ ] `doit sync unpair <device>` - remove pairing
+- [ ] Update runSyncShow() to display certificate fingerprint
+- [ ] Update runSyncPair() to exchange cert fingerprints during pairing
+- [ ] Save peer's cert fingerprint after successful pairing
+- [ ] Pairing request includes: pairing_code, device_id, device_name, cert_fingerprint
+- [ ] Pairing response includes: shared_secret, device_id, device_name, cert_fingerprint
+
+### 3.6 Testing
+
+- [ ] Unit test: Certificate generation
+- [ ] Unit test: Fingerprint verification
+- [ ] Integration test: HTTPS connection with mTLS
+- [ ] Integration test: Pairing with cert exchange
+- [ ] Security test: Unknown peer rejected (wrong fingerprint)
+- [ ] Wireshark test: Verify traffic encrypted
 
 ---
 
