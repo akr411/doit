@@ -56,6 +56,10 @@ func (pm *PairingManager) GenerateCode() (*PairingCode, error) {
 }
 
 func (pm *PairingManager) ValidateCode(code string) (bool, error) {
+	if len(code) != 7 {
+		return false, fmt.Errorf("invalid code format")
+	}
+
 	cleanCode := code[:3] + code[4:]
 
 	var expiresAt int64
@@ -86,6 +90,10 @@ func (pm *PairingManager) ValidateCode(code string) (bool, error) {
 }
 
 func (pm *PairingManager) MarkUsed(code string) error {
+	if len(code) != 7 {
+		return fmt.Errorf("invalid code format")
+	}
+
 	cleanCode := code[:3] + code[4:]
 	_, err := pm.db.Exec(`
 		UPDATE pairing_codes SET used = 1 WHERE code = ?

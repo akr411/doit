@@ -98,28 +98,51 @@ func TestMergeDedupesOperations(t *testing.T) {
 }
 
 func TestCompareOperations(t *testing.T) {
-	op1 := &Operation{Timestamp: 100, DeviceID: "device-a"}
-	op2 := &Operation{Timestamp: 200, DeviceID: "device-b"}
-
-	if CompareOperations(op1, op2) != -1 {
-		t.Error("op1 should be less than op2 based on timestamp")
+	tests := []struct {
+		name string
+		op1  *Operation
+		op2  *Operation
+		want int
+	}{
+		{
+			name: "timestamp difference - op1 earlier",
+			op1:  &Operation{Timestamp: 100, DeviceID: "device-a"},
+			op2:  &Operation{Timestamp: 200, DeviceID: "device-b"},
+			want: -1,
+		},
+		{
+			name: "timestamp difference - op2 earlier",
+			op1:  &Operation{Timestamp: 200, DeviceID: "device-b"},
+			op2:  &Operation{Timestamp: 100, DeviceID: "device-a"},
+			want: 1,
+		},
+		{
+			name: "same timestamp - device ID tiebreaker",
+			op1:  &Operation{Timestamp: 100, DeviceID: "device-a"},
+			op2:  &Operation{Timestamp: 100, DeviceID: "device-b"},
+			want: -1,
+		},
+		{
+			name: "same timestamp - reverse device ID",
+			op1:  &Operation{Timestamp: 100, DeviceID: "device-b"},
+			op2:  &Operation{Timestamp: 100, DeviceID: "device-a"},
+			want: 1,
+		},
+		{
+			name: "identical operations",
+			op1:  &Operation{Timestamp: 100, DeviceID: "device-a"},
+			op2:  &Operation{Timestamp: 100, DeviceID: "device-a"},
+			want: 0,
+		},
 	}
 
-	if CompareOperations(op2, op1) != 1 {
-		t.Error("op2 should be greater than op1 based on timestamp")
-	}
-}
-
-func TestCompareOperationsTiebreaker(t *testing.T) {
-	op1 := &Operation{Timestamp: 100, DeviceID: "device-a"}
-	op2 := &Operation{Timestamp: 100, DeviceID: "device-b"}
-
-	if CompareOperations(op1, op2) != -1 {
-		t.Error("op1 should be less than op2 based on device ID")
-	}
-
-	if CompareOperations(op2, op1) != 1 {
-		t.Error("op2 should be greater than op1 based on device ID")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := CompareOperations(tt.op1, tt.op2)
+			if got != tt.want {
+				t.Errorf("CompareOperations() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 

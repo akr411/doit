@@ -139,24 +139,16 @@ func (s *Storage) ShouldRunCleanup() bool {
 	return time.Now().Unix() >= nextCleanup
 }
 
-func (s *Storage) GetCleanupStats() (map[string]interface{}, error) {
-	stats := make(map[string]interface{})
+func (s *Storage) GetCleanupStats() (SyncStats, error) {
+	var stats SyncStats
 
-	var opCount, tombstoneCount, syncedOps, unsyncedOps int
-	s.db.QueryRow("SELECT COUNT(*) FROM operations").Scan(&opCount)
-	s.db.QueryRow("SELECT COUNT(*) FROM operations WHERE synced=1").Scan(&syncedOps)
-	s.db.QueryRow("SELECT COUNT(*) FROM operations WHERE synced=0").Scan(&unsyncedOps)
-	s.db.QueryRow("SELECT COUNT(*) FROM todos WHERE deleted=1").Scan(&tombstoneCount)
-
-	stats["total_operations"] = opCount
-	stats["synced_operations"] = syncedOps
-	stats["unsynced_operations"] = unsyncedOps
-	stats["tombstones"] = tombstoneCount
+	s.db.QueryRow("SELECT COUNT(*) FROM operations").Scan(&stats.TotalOperations)
+	s.db.QueryRow("SELECT COUNT(*) FROM operations WHERE synced=1").Scan(&stats.SyncedOperations)
+	s.db.QueryRow("SELECT COUNT(*) FROM operations WHERE synced=0").Scan(&stats.UnsyncedOperations)
+	s.db.QueryRow("SELECT COUNT(*) FROM todos WHERE deleted=1").Scan(&stats.Tombstones)
 
 	retentionDays := s.getOperationRetentionDays()
 	cutoffNano := time.Now().UnixNano() - int64(retentionDays*24*60*60)*1e9
-
-	var cleanableOps, cleanableTombstones int
 
 	tombRetention := s.getTombstoneRetentionDays()
 	tombCutoff := time.Now().UnixNano() - int64(tombRetention*24*60*60)*1e9
@@ -172,7 +164,7 @@ func (s *Storage) GetCleanupStats() (map[string]interface{}, error) {
 		WHERE deleted=1
 		AND updated_at < ?
 		AND id NOT IN (SELECT id FROM keep_ids)
-	`, completedLimit, tombCutoff).Scan(&cleanableTombstones)
+	`, completedLimit, tombCutoff).Scan(&stats.CleanableTombstones)
 
 	s.db.QueryRow(`
 		SELECT COUNT(*) FROM operations
@@ -185,26 +177,21 @@ func (s *Storage) GetCleanupStats() (map[string]interface{}, error) {
 			)
 			WHERE rn <= ?
 		)
-	`, cutoffNano, s.getMaxOperationsPerTodo()).Scan(&cleanableOps)
-
-	stats["cleanable_operations"] = cleanableOps
-	stats["cleanable_tombstones"] = cleanableTombstones
+	`, cutoffNano, s.getMaxOperationsPerTodo()).Scan(&stats.CleanableOperations)
 
 	var pageCount, pageSize int64
 	s.db.QueryRow("PRAGMA page_count").Scan(&pageCount)
 	s.db.QueryRow("PRAGMA page_size").Scan(&pageSize)
-	stats["db_size_kb"] = (pageCount * pageSize) / 1024
+	stats.DBSizeKB = (pageCount * pageSize) / 1024
 
 	var lastCleanupStr string
 	err := s.db.QueryRow("SELECT value FROM config WHERE key='last_cleanup_time'").Scan(&lastCleanupStr)
 	if err == nil {
-		var lastCleanup int64
-		fmt.Sscanf(lastCleanupStr, "%d", &lastCleanup)
-		stats["last_cleanup_time"] = lastCleanup
-		stats["hours_since_cleanup"] = (time.Now().Unix() - lastCleanup) / 3600
+		fmt.Sscanf(lastCleanupStr, "%d", &stats.LastCleanupTime)
+		stats.HoursSinceCleanup = int((time.Now().Unix() - stats.LastCleanupTime) / 3600)
 	} else {
-		stats["last_cleanup_time"] = 0
-		stats["hours_since_cleanup"] = -1
+		stats.LastCleanupTime = 0
+		stats.HoursSinceCleanup = -1
 	}
 
 	return stats, nil

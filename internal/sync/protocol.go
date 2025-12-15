@@ -4,14 +4,18 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"time"
 
+	"github.com/akr411/doit/internal/retry"
 	"github.com/akr411/doit/internal/storage"
 )
+
+var ErrUnauthorized = errors.New("unauthorized")
 
 var syncHTTPClient = &http.Client{
 	Timeout: 30 * time.Second,
@@ -93,11 +97,12 @@ func (sc *SyncClient) PullOperations(peer *Peer, secret string, since string) ([
 	url := fmt.Sprintf("https://%s/sync/operations?since=%s", peer.Address, since)
 
 	var operations []Operation
-	err := sc.executeWithRetry(func() error {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx := context.Background()
+	err := sc.executeWithRetry(ctx, func() error {
+		reqCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+		req, err := http.NewRequestWithContext(reqCtx, "GET", url, nil)
 		if err != nil {
 			return fmt.Errorf("failed to create request: %w", err)
 		}
@@ -111,7 +116,7 @@ func (sc *SyncClient) PullOperations(peer *Peer, secret string, since string) ([
 		defer resp.Body.Close()
 
 		if resp.StatusCode == http.StatusUnauthorized {
-			return fmt.Errorf("unauthorized")
+			return fmt.Errorf("pairing rejected: %w", ErrUnauthorized)
 		}
 
 		if resp.StatusCode != http.StatusOK {
@@ -147,11 +152,12 @@ func (sc *SyncClient) PushOperations(peer *Peer, secret string, ops []Operation)
 		return fmt.Errorf("failed to marshal operations: %w", err)
 	}
 
-	return sc.executeWithRetry(func() error {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx := context.Background()
+	return sc.executeWithRetry(ctx, func() error {
+		reqCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+		req, err := http.NewRequestWithContext(reqCtx, "POST", url, bytes.NewReader(body))
 		if err != nil {
 			return fmt.Errorf("failed to create request: %w", err)
 		}
@@ -166,7 +172,7 @@ func (sc *SyncClient) PushOperations(peer *Peer, secret string, ops []Operation)
 		defer resp.Body.Close()
 
 		if resp.StatusCode == http.StatusUnauthorized {
-			return fmt.Errorf("unauthorized")
+			return fmt.Errorf("pairing rejected: %w", ErrUnauthorized)
 		}
 
 		if resp.StatusCode != http.StatusOK {
@@ -196,9 +202,6 @@ func (sc *SyncClient) InitialSync(peer *Peer) error {
 	}
 
 	ourLastOpID := syncState.LastOperationID
-	if ourLastOpID == "" {
-		ourLastOpID = ""
-	}
 
 	newOps, err := sc.PullOperations(peer, secret, ourLastOpID)
 	if err != nil {
@@ -220,12 +223,12 @@ func (sc *SyncClient) InitialSync(peer *Peer) error {
 	operations := make([]Operation, 0, len(ops))
 	for _, opData := range ops {
 		op := Operation{
-			ID:        opData["id"].(string),
-			Type:      opData["type"].(string),
-			TodoID:    opData["todo_id"].(string),
-			Data:      []byte(opData["data"].(string)),
-			Timestamp: opData["timestamp"].(int64),
-			DeviceID:  opData["device_id"].(string),
+			ID:        opData.ID,
+			Type:      opData.Type,
+			TodoID:    opData.TodoID,
+			Data:      []byte(opData.Data),
+			Timestamp: opData.Timestamp,
+			DeviceID:  opData.DeviceID,
 		}
 		operations = append(operations, op)
 	}
@@ -259,40 +262,17 @@ func (sc *SyncClient) InitialSync(peer *Peer) error {
 	return nil
 }
 
-func (sc *SyncClient) executeWithRetry(fn func() error) error {
-	intervals := []time.Duration{
-		1 * time.Second,
-		2 * time.Second,
-		4 * time.Second,
-		8 * time.Second,
-		16 * time.Second,
-		32 * time.Second,
-		60 * time.Second,
+func (sc *SyncClient) executeWithRetry(ctx context.Context, fn func() error) error {
+	cfg := retry.Config{
+		MaxAttempts: 7,
+		InitialWait: 1 * time.Second,
+		MaxWait:     60 * time.Second,
+		Multiplier:  2.0,
 	}
 
-	maxDuration := 2 * time.Minute
-	startTime := time.Now()
-
-	var lastErr error
-	for i, interval := range intervals {
-		if i > 0 {
-			if time.Since(startTime) > maxDuration {
-				break
-			}
-			time.Sleep(interval)
-		}
-
-		err := fn()
-		if err == nil {
-			return nil
-		}
-
-		lastErr = err
-
-		if err.Error() == "unauthorized" {
-			return err
-		}
+	err := retry.Do(ctx, cfg, fn)
+	if errors.Is(err, ErrUnauthorized) {
+		return err
 	}
-
-	return lastErr
+	return err
 }

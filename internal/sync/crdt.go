@@ -105,7 +105,7 @@ func applyCreateInTx(tx *sql.Tx, op *Operation) error {
 	}
 
 	var todo map[string]interface{}
-	if err := unmarshalJSON(op.Data, &todo); err != nil {
+	if err := json.Unmarshal(op.Data, &todo); err != nil {
 		return fmt.Errorf("failed to unmarshal todo data: %w", err)
 	}
 
@@ -151,7 +151,7 @@ func applyUpdateInTx(tx *sql.Tx, op *Operation) error {
 	}
 
 	var todo map[string]interface{}
-	if err := unmarshalJSON(op.Data, &todo); err != nil {
+	if err := json.Unmarshal(op.Data, &todo); err != nil {
 		return fmt.Errorf("failed to unmarshal todo data: %w", err)
 	}
 
@@ -197,7 +197,7 @@ func applyCompleteInTx(tx *sql.Tx, op *Operation) error {
 	}
 
 	var todo map[string]interface{}
-	if err := unmarshalJSON(op.Data, &todo); err != nil {
+	if err := json.Unmarshal(op.Data, &todo); err != nil {
 		return fmt.Errorf("failed to unmarshal todo data: %w", err)
 	}
 
@@ -245,8 +245,4 @@ func applyDeleteInTx(tx *sql.Tx, op *Operation) error {
 	}
 
 	return nil
-}
-
-func unmarshalJSON(data []byte, v interface{}) error {
-	return json.Unmarshal(data, v)
 }

@@ -172,12 +172,12 @@ func (ss *SyncServer) handleGetOperations(w http.ResponseWriter, r *http.Request
 	operations := make([]Operation, 0, len(ops))
 	for _, opData := range ops {
 		op := Operation{
-			ID:        opData["id"].(string),
-			Type:      opData["type"].(string),
-			TodoID:    opData["todo_id"].(string),
-			Data:      []byte(opData["data"].(string)),
-			Timestamp: opData["timestamp"].(int64),
-			DeviceID:  opData["device_id"].(string),
+			ID:        opData.ID,
+			Type:      opData.Type,
+			TodoID:    opData.TodoID,
+			Data:      []byte(opData.Data),
+			Timestamp: opData.Timestamp,
+			DeviceID:  opData.DeviceID,
 		}
 		operations = append(operations, op)
 	}

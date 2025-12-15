@@ -633,13 +633,13 @@ func (s *Storage) SaveOperation(id, opType, todoID string, data []byte, timestam
 	return err
 }
 
-func (s *Storage) GetOperations(since string) ([]map[string]interface{}, error) {
+func (s *Storage) GetOperations(since string) ([]OperationData, error) {
 	var rows *sql.Rows
 	var err error
 
 	if since == "" {
 		rows, err = s.db.Query(`
-			SELECT id, type, todo_id, data, timestamp, device_id
+			SELECT id, type, todo_id, data, timestamp, device_id, synced
 			FROM operations
 			WHERE synced = 0
 			ORDER BY timestamp ASC, id ASC
@@ -652,7 +652,7 @@ func (s *Storage) GetOperations(since string) ([]map[string]interface{}, error) 
 		}
 
 		rows, err = s.db.Query(`
-			SELECT id, type, todo_id, data, timestamp, device_id
+			SELECT id, type, todo_id, data, timestamp, device_id, synced
 			FROM operations
 			WHERE timestamp > ? AND synced = 0
 			ORDER BY timestamp ASC, id ASC
@@ -664,31 +664,21 @@ func (s *Storage) GetOperations(since string) ([]map[string]interface{}, error) 
 	}
 	defer rows.Close()
 
-	var operations []map[string]interface{}
+	var operations []OperationData
 	for rows.Next() {
-		var id, opType, todoID, data, deviceID string
-		var timestamp int64
-
-		if err := rows.Scan(&id, &opType, &todoID, &data, &timestamp, &deviceID); err != nil {
+		var op OperationData
+		if err := rows.Scan(&op.ID, &op.Type, &op.TodoID, &op.Data, &op.Timestamp, &op.DeviceID, &op.Synced); err != nil {
 			return nil, err
 		}
-
-		operations = append(operations, map[string]interface{}{
-			"id":        id,
-			"type":      opType,
-			"todo_id":   todoID,
-			"data":      string(data),
-			"timestamp": timestamp,
-			"device_id": deviceID,
-		})
+		operations = append(operations, op)
 	}
 
 	return operations, rows.Err()
 }
 
-func (s *Storage) GetOperationsSince(timestamp int64) ([]map[string]interface{}, error) {
+func (s *Storage) GetOperationsSince(timestamp int64) ([]OperationData, error) {
 	rows, err := s.db.Query(`
-		SELECT id, type, todo_id, data, timestamp, device_id
+		SELECT id, type, todo_id, data, timestamp, device_id, synced
 		FROM operations
 		WHERE timestamp > ?
 		ORDER BY timestamp ASC, id ASC
@@ -698,23 +688,13 @@ func (s *Storage) GetOperationsSince(timestamp int64) ([]map[string]interface{},
 	}
 	defer rows.Close()
 
-	var operations []map[string]interface{}
+	var operations []OperationData
 	for rows.Next() {
-		var id, opType, todoID, data, deviceID string
-		var timestamp int64
-
-		if err := rows.Scan(&id, &opType, &todoID, &data, &timestamp, &deviceID); err != nil {
+		var op OperationData
+		if err := rows.Scan(&op.ID, &op.Type, &op.TodoID, &op.Data, &op.Timestamp, &op.DeviceID, &op.Synced); err != nil {
 			return nil, err
 		}
-
-		operations = append(operations, map[string]interface{}{
-			"id":        id,
-			"type":      opType,
-			"todo_id":   todoID,
-			"data":      string(data),
-			"timestamp": timestamp,
-			"device_id": deviceID,
-		})
+		operations = append(operations, op)
 	}
 
 	return operations, rows.Err()

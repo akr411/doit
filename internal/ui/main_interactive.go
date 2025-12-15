@@ -439,7 +439,7 @@ func updateStreakForStore(store *storage.Storage) error {
 
 	streak, err := store.GetStreak()
 	if err != nil {
-		return fmt.Errorf("failed to get streak: %v", err)
+		return fmt.Errorf("failed to get streak: %w", err)
 	}
 
 	now := time.Now()
@@ -469,7 +469,7 @@ func updateStreakForStore(store *storage.Storage) error {
 	streak.LastCompletedAt = now.Unix()
 
 	if err := store.UpdateStreak(streak); err != nil {
-		return fmt.Errorf("failed to update streak: %v", err)
+		return fmt.Errorf("failed to update streak: %w", err)
 	}
 	return nil
 }

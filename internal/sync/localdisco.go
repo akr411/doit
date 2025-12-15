@@ -195,43 +195,31 @@ func (ld *LocalDiscovery) receiveLoop() {
 		default:
 		}
 
-		if ld.conn4 != nil {
-			ld.conn4.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
-			n, addr, err := ld.conn4.ReadFromUDP(buf)
-			if err != nil {
-				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-					continue
-				}
-				select {
-				case <-ld.stopCh:
-					return
-				default:
-					log.Printf("Failed to read IPv4 UDP: %v", err)
-				}
-				continue
-			}
-
-			ld.processPacket(buf[:n], addr.IP, ourID)
-		}
-
-		if ld.conn6 != nil {
-			ld.conn6.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
-			n, addr, err := ld.conn6.ReadFromUDP(buf)
-			if err != nil {
-				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-					continue
-				}
-				select {
-				case <-ld.stopCh:
-					return
-				default:
-				}
-				continue
-			}
-
-			ld.processPacket(buf[:n], addr.IP, ourID)
-		}
+		ld.readUDPConnection(ld.conn4, buf, ourID, "IPv4")
+		ld.readUDPConnection(ld.conn6, buf, ourID, "IPv6")
 	}
+}
+
+func (ld *LocalDiscovery) readUDPConnection(conn *net.UDPConn, buf []byte, ourID, ipVersion string) {
+	if conn == nil {
+		return
+	}
+
+	conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	n, addr, err := conn.ReadFromUDP(buf)
+	if err != nil {
+		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+			return
+		}
+		select {
+		case <-ld.stopCh:
+		default:
+			log.Printf("Failed to read %s UDP: %v", ipVersion, err)
+		}
+		return
+	}
+
+	ld.processPacket(buf[:n], addr.IP, ourID)
 }
 
 func (ld *LocalDiscovery) processPacket(data []byte, srcIP net.IP, ourID string) {

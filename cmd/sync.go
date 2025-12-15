@@ -76,15 +76,15 @@ func runCleanup(cmd *cobra.Command, args []string) error {
 		fmt.Println("=== Dry Run - No data will be deleted ===")
 		fmt.Println()
 		fmt.Printf("Current state:\n")
-		fmt.Printf("  Total operations: %v\n", stats["total_operations"])
-		fmt.Printf("  Synced operations: %v\n", stats["synced_operations"])
-		fmt.Printf("  Unsynced operations: %v\n", stats["unsynced_operations"])
-		fmt.Printf("  Tombstones: %v\n", stats["tombstones"])
-		fmt.Printf("  Database size: %v KB\n", stats["db_size_kb"])
+		fmt.Printf("  Total operations: %v\n", stats.TotalOperations)
+		fmt.Printf("  Synced operations: %v\n", stats.SyncedOperations)
+		fmt.Printf("  Unsynced operations: %v\n", stats.UnsyncedOperations)
+		fmt.Printf("  Tombstones: %v\n", stats.Tombstones)
+		fmt.Printf("  Database size: %v KB\n", stats.DBSizeKB)
 		fmt.Println()
 		fmt.Printf("Would delete:\n")
-		fmt.Printf("  Cleanable operations: %v\n", stats["cleanable_operations"])
-		fmt.Printf("  Cleanable tombstones: %v\n", stats["cleanable_tombstones"])
+		fmt.Printf("  Cleanable operations: %v\n", stats.CleanableOperations)
+		fmt.Printf("  Cleanable tombstones: %v\n", stats.CleanableTombstones)
 		fmt.Println()
 		ui.PrintSuccess("Run without --dry-run to actually clean")
 		return nil
@@ -134,19 +134,19 @@ var statusCmd = &cobra.Command{
 		}
 
 		fmt.Println("Database:")
-		fmt.Printf("  Size: %v KB\n", stats["db_size_kb"])
+		fmt.Printf("  Size: %v KB\n", stats.DBSizeKB)
 		fmt.Println()
 
 		fmt.Println("Operations:")
-		fmt.Printf("  Total: %v\n", stats["total_operations"])
-		fmt.Printf("  Synced: %v\n", stats["synced_operations"])
-		fmt.Printf("  Unsynced: %v\n", stats["unsynced_operations"])
-		fmt.Printf("  Cleanable: %v\n", stats["cleanable_operations"])
+		fmt.Printf("  Total: %v\n", stats.TotalOperations)
+		fmt.Printf("  Synced: %v\n", stats.SyncedOperations)
+		fmt.Printf("  Unsynced: %v\n", stats.UnsyncedOperations)
+		fmt.Printf("  Cleanable: %v\n", stats.CleanableOperations)
 		fmt.Println()
 
 		fmt.Println("Tombstones:")
-		fmt.Printf("  Total: %v\n", stats["tombstones"])
-		fmt.Printf("  Cleanable: %v\n", stats["cleanable_tombstones"])
+		fmt.Printf("  Total: %v\n", stats.Tombstones)
+		fmt.Printf("  Cleanable: %v\n", stats.CleanableTombstones)
 		fmt.Println()
 
 		cleanupEnabled, _ := store.GetConfig("auto_cleanup_enabled")
@@ -154,8 +154,8 @@ var statusCmd = &cobra.Command{
 			fmt.Println("Auto-cleanup: disabled")
 		} else {
 			fmt.Println("Auto-cleanup: enabled")
-			if hoursSince, ok := stats["hours_since_cleanup"].(int64); ok && hoursSince >= 0 {
-				fmt.Printf("  Last run: %d hours ago\n", hoursSince)
+			if stats.HoursSinceCleanup >= 0 {
+				fmt.Printf("  Last run: %d hours ago\n", stats.HoursSinceCleanup)
 			} else {
 				fmt.Println("  Last run: never")
 			}
