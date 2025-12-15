@@ -167,6 +167,12 @@ func (s *Storage) createTables() error {
 	);
 
 	CREATE INDEX IF NOT EXISTS idx_pairing_expires ON pairing_codes(expires_at);
+
+	CREATE TABLE IF NOT EXISTS peer_certificates (
+		device_id TEXT PRIMARY KEY,
+		fingerprint TEXT NOT NULL,
+		FOREIGN KEY (device_id) REFERENCES peers(id) ON DELETE CASCADE
+	);
 	`
 
 	if _, err := s.db.Exec(schema); err != nil {

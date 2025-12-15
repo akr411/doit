@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -306,6 +307,12 @@ func runSyncShow(cmd *cobra.Command, args []string) error {
 
 	deviceName := sync.GetDeviceName()
 
+	certMgr := sync.NewCertificateManager(store.GetDB())
+	fingerprint, err := certMgr.GetFingerprint()
+	if err != nil {
+		return fmt.Errorf("failed to get fingerprint: %w", err)
+	}
+
 	fmt.Println()
 	fmt.Printf("═══════════════════════════════════\n")
 	fmt.Printf("  Pairing Code: %s\n", deviceName)
@@ -315,6 +322,8 @@ func runSyncShow(cmd *cobra.Command, args []string) error {
 	fmt.Println()
 	expiresIn := time.Unix(0, code.ExpiresAt).Sub(time.Now())
 	fmt.Printf("  Expires: %dm %ds\n", int(expiresIn.Minutes()), int(expiresIn.Seconds())%60)
+	fmt.Println()
+	fmt.Printf("  Fingerprint: %s...\n", fingerprint[:16])
 	fmt.Println()
 	fmt.Printf("On other device run:\n")
 	fmt.Printf("  $ doit sync pair %s\n", code.Code)
@@ -343,20 +352,37 @@ func runSyncPair(cmd *cobra.Command, args []string) error {
 	deviceID, _ := sync.GetDeviceID(store.GetDB())
 	deviceName := sync.GetDeviceName()
 
+	certMgr := sync.NewCertificateManager(store.GetDB())
+	ourFingerprint, err := certMgr.GetFingerprint()
+	if err != nil {
+		return fmt.Errorf("failed to get fingerprint: %w", err)
+	}
+
+	transport := &http.Transport{
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: true,
+		},
+	}
+	client := &http.Client{
+		Timeout:   30 * time.Second,
+		Transport: transport,
+	}
+
 	var paired bool
 	for _, peer := range peers {
 		fmt.Printf("Pairing with %s...\n", peer.Name)
 
 		reqData := map[string]string{
-			"pairing_code": code,
-			"device_id":    deviceID,
-			"device_name":  deviceName,
+			"pairing_code":     code,
+			"device_id":        deviceID,
+			"device_name":      deviceName,
+			"cert_fingerprint": ourFingerprint,
 		}
 
 		body, _ := json.Marshal(reqData)
-		url := fmt.Sprintf("http://%s/sync/pair", peer.Address)
+		url := fmt.Sprintf("https://%s/sync/pair", peer.Address)
 
-		resp, err := http.Post(url, "application/json", bytes.NewReader(body))
+		resp, err := client.Post(url, "application/json", bytes.NewReader(body))
 		if err != nil {
 			ui.PrintWarning("Failed: %v", err)
 			continue
@@ -369,9 +395,10 @@ func runSyncPair(cmd *cobra.Command, args []string) error {
 		}
 
 		var pairResp struct {
-			SharedSecret string `json:"shared_secret"`
-			DeviceID     string `json:"device_id"`
-			DeviceName   string `json:"device_name"`
+			SharedSecret    string `json:"shared_secret"`
+			DeviceID        string `json:"device_id"`
+			DeviceName      string `json:"device_name"`
+			CertFingerprint string `json:"cert_fingerprint"`
 		}
 
 		if err := json.NewDecoder(resp.Body).Decode(&pairResp); err != nil {
@@ -382,6 +409,13 @@ func runSyncPair(cmd *cobra.Command, args []string) error {
 		if err := store.SavePeerSecret(peer.ID, pairResp.SharedSecret); err != nil {
 			ui.PrintWarning("Failed to save secret: %v", err)
 			continue
+		}
+
+		if pairResp.CertFingerprint != "" {
+			if err := certMgr.SavePeerCertificate(peer.ID, pairResp.CertFingerprint); err != nil {
+				ui.PrintWarning("Failed to save cert: %v", err)
+				continue
+			}
 		}
 
 		ui.PrintSuccess("✓ Paired with %s", peer.Name)

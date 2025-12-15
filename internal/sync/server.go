@@ -69,6 +69,16 @@ func NewSyncServer(store *storage.Storage, peerMgr *PeerManager) (*SyncServer, e
 }
 
 func (ss *SyncServer) Start(port int) error {
+	certMgr := NewCertificateManager(ss.store.GetDB())
+	if err := certMgr.GenerateSelfSignedCert(ss.deviceID); err != nil {
+		return fmt.Errorf("failed to generate TLS cert: %w", err)
+	}
+
+	tlsConfig, err := certMgr.GetTLSConfig(true)
+	if err != nil {
+		return fmt.Errorf("failed to get TLS config: %w", err)
+	}
+
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/sync/operations", ss.authMiddleware(ss.handleOperations))
@@ -83,13 +93,14 @@ func (ss *SyncServer) Start(port int) error {
 		srv := &http.Server{
 			Addr:         fmt.Sprintf(":%d", p),
 			Handler:      mux,
+			TLSConfig:    tlsConfig,
 			ReadTimeout:  15 * time.Second,
 			WriteTimeout: 15 * time.Second,
 			IdleTimeout:  60 * time.Second,
 		}
 
 		go func(server *http.Server) {
-			if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			if err := server.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
 				ss.errCh <- err
 			}
 		}(srv)
@@ -102,7 +113,7 @@ func (ss *SyncServer) Start(port int) error {
 		case <-time.After(100 * time.Millisecond):
 			ss.server = srv
 			ss.port = p
-			log.Printf("HTTP sync server started on port %d", p)
+			log.Printf("HTTPS sync server started on port %d", p)
 			return nil
 		}
 	}
@@ -236,9 +247,10 @@ func (ss *SyncServer) handlePair(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		PairingCode string `json:"pairing_code"`
-		DeviceID    string `json:"device_id"`
-		DeviceName  string `json:"device_name"`
+		PairingCode     string `json:"pairing_code"`
+		DeviceID        string `json:"device_id"`
+		DeviceName      string `json:"device_name"`
+		CertFingerprint string `json:"cert_fingerprint"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -257,14 +269,26 @@ func (ss *SyncServer) handlePair(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Failed to mark code used: %v", err)
 	}
 
+	if req.CertFingerprint != "" {
+		certMgr := NewCertificateManager(ss.store.GetDB())
+		if err := certMgr.SavePeerCertificate(req.DeviceID, req.CertFingerprint); err != nil {
+			log.Printf("Failed to save peer certificate: %v", err)
+		}
+	}
+
+	certMgr := NewCertificateManager(ss.store.GetDB())
+	ourFingerprint, _ := certMgr.GetFingerprint()
+
 	response := struct {
-		SharedSecret string `json:"shared_secret"`
-		DeviceID     string `json:"device_id"`
-		DeviceName   string `json:"device_name"`
+		SharedSecret    string `json:"shared_secret"`
+		DeviceID        string `json:"device_id"`
+		DeviceName      string `json:"device_name"`
+		CertFingerprint string `json:"cert_fingerprint"`
 	}{
-		SharedSecret: ss.secret,
-		DeviceID:     ss.deviceID,
-		DeviceName:   ss.deviceName,
+		SharedSecret:    ss.secret,
+		DeviceID:        ss.deviceID,
+		DeviceName:      ss.deviceName,
+		CertFingerprint: ourFingerprint,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

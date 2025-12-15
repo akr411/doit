@@ -36,14 +36,32 @@ type PeerState struct {
 }
 
 func NewSyncClient(store *storage.Storage) (*SyncClient, error) {
+	certMgr := NewCertificateManager(store.GetDB())
+	tlsConfig, err := certMgr.GetTLSConfig(false)
+	if err != nil {
+		return nil, err
+	}
+
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig:       tlsConfig,
+			MaxIdleConns:          100,
+			MaxConnsPerHost:       20,
+			MaxIdleConnsPerHost:   20,
+			IdleConnTimeout:       90 * time.Second,
+			ResponseHeaderTimeout: 10 * time.Second,
+		},
+	}
+
 	return &SyncClient{
-		client: syncHTTPClient,
+		client: client,
 		store:  store,
 	}, nil
 }
 
 func (sc *SyncClient) GetPeerState(peer *Peer) (*PeerState, error) {
-	url := fmt.Sprintf("http://%s/sync/state", peer.Address)
+	url := fmt.Sprintf("https://%s/sync/state", peer.Address)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -72,7 +90,7 @@ func (sc *SyncClient) GetPeerState(peer *Peer) (*PeerState, error) {
 }
 
 func (sc *SyncClient) PullOperations(peer *Peer, secret string, since string) ([]Operation, error) {
-	url := fmt.Sprintf("http://%s/sync/operations?since=%s", peer.Address, since)
+	url := fmt.Sprintf("https://%s/sync/operations?since=%s", peer.Address, since)
 
 	var operations []Operation
 	err := sc.executeWithRetry(func() error {
@@ -121,7 +139,7 @@ func (sc *SyncClient) PushOperations(peer *Peer, secret string, ops []Operation)
 		return nil
 	}
 
-	url := fmt.Sprintf("http://%s/sync/operations", peer.Address)
+	url := fmt.Sprintf("https://%s/sync/operations", peer.Address)
 
 	request := OperationsRequest{Operations: ops}
 	body, err := json.Marshal(request)
