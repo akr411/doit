@@ -8,6 +8,9 @@ import (
 	"strings"
 )
 
+// Merge combines local and remote operation lists, deduplicating by ID and sorting by timestamp.
+// This implements the CRDT merge operation, ensuring convergence across devices.
+// Operations are sorted by timestamp ascending, with device ID as tiebreaker for determinism.
 func Merge(local, remote []*Operation) []*Operation {
 	opMap := make(map[string]*Operation)
 
@@ -36,6 +39,9 @@ func Merge(local, remote []*Operation) []*Operation {
 	return merged
 }
 
+// CompareOperations compares two operations for Last-Write-Wins (LWW) ordering.
+// Returns -1 if op1 should be applied first, 1 if op2 should be applied first, 0 if equal.
+// Comparison is timestamp-first, with device ID as deterministic tiebreaker.
 func CompareOperations(op1, op2 *Operation) int {
 	if op1.Timestamp != op2.Timestamp {
 		if op1.Timestamp > op2.Timestamp {
@@ -46,6 +52,10 @@ func CompareOperations(op1, op2 *Operation) int {
 	return strings.Compare(op1.DeviceID, op2.DeviceID)
 }
 
+// RebuildState reconstructs the entire todos table from the operation log.
+// It clears the todos table and reapplies all operations in timestamp order.
+// This is used for conflict resolution and state recovery.
+// Returns error if transaction fails or any operation application fails.
 func RebuildState(db *sql.DB, operations []*Operation) error {
 	tx, err := db.Begin()
 	if err != nil {

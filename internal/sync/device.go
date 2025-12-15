@@ -9,6 +9,9 @@ import (
 	"github.com/google/uuid"
 )
 
+// GetDeviceID retrieves or generates the unique device identifier.
+// On first call, generates a new UUID and stores it in config.
+// Returns the device ID string or error if database access fails.
 func GetDeviceID(db *sql.DB) (string, error) {
 	var deviceID string
 	err := db.QueryRow("SELECT value FROM config WHERE key = 'device_id'").Scan(&deviceID)
@@ -31,6 +34,9 @@ func GetDeviceID(db *sql.DB) (string, error) {
 	return deviceID, nil
 }
 
+// GetDeviceName returns a human-readable device name combining hostname and OS.
+// Format: "hostname-os" (e.g., "macbook-darwin", "desktop-linux").
+// Returns "unknown-os" if hostname cannot be determined.
 func GetDeviceName() string {
 	hostname, err := os.Hostname()
 	if err != nil {
@@ -39,6 +45,8 @@ func GetDeviceName() string {
 	return fmt.Sprintf("%s-%s", hostname, runtime.GOOS)
 }
 
+// IsSyncEnabled checks if P2P synchronization is enabled in config.
+// Returns false if config key doesn't exist or value is not "true".
 func IsSyncEnabled(db *sql.DB) bool {
 	var value string
 	err := db.QueryRow("SELECT value FROM config WHERE key = 'sync_enabled'").Scan(&value)
@@ -48,6 +56,8 @@ func IsSyncEnabled(db *sql.DB) bool {
 	return value == "true"
 }
 
+// SetSyncEnabled updates the sync enabled status in config.
+// Stores "true" or "false" string in the database.
 func SetSyncEnabled(db *sql.DB, enabled bool) error {
 	value := "false"
 	if enabled {
@@ -62,6 +72,8 @@ func SetSyncEnabled(db *sql.DB, enabled bool) error {
 	return err
 }
 
+// GetSyncPort retrieves the configured sync server port.
+// Returns 49152 as default if not configured or on error.
 func GetSyncPort(db *sql.DB) int {
 	var value string
 	err := db.QueryRow("SELECT value FROM config WHERE key = 'sync_port'").Scan(&value)
@@ -77,6 +89,8 @@ func GetSyncPort(db *sql.DB) int {
 	return port
 }
 
+// SetSyncPort updates the sync server port in config.
+// The port is stored as a string representation of the integer.
 func SetSyncPort(db *sql.DB, port int) error {
 	_, err := db.Exec(`
 		INSERT INTO config (key, value) VALUES ('sync_port', ?)

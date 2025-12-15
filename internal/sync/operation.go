@@ -5,6 +5,7 @@ import (
 	"fmt"
 )
 
+// Operation type constants define the four CRDT operation types.
 const (
 	OpTypeCreate   = "CREATE"
 	OpTypeUpdate   = "UPDATE"
@@ -12,6 +13,9 @@ const (
 	OpTypeDelete   = "DELETE"
 )
 
+// Operation represents a CRDT operation for todo synchronization.
+// Operations are the atomic units of change in the distributed system.
+// Each operation has a unique ID, timestamp for LWW resolution, and device ID for conflict tiebreaking.
 type Operation struct {
 	ID        string `json:"id"`
 	Type      string `json:"type"`
@@ -21,6 +25,9 @@ type Operation struct {
 	DeviceID  string `json:"device_id"`
 }
 
+// Apply executes the operation against the database, recording it and applying state changes.
+// Operations are idempotent - applying the same operation twice has no additional effect.
+// Returns error if transaction fails or operation type is unknown.
 func (op *Operation) Apply(db *sql.DB) error {
 	tx, err := db.Begin()
 	if err != nil {

@@ -15,6 +15,7 @@ import (
 	"github.com/akr411/doit/internal/storage"
 )
 
+// ErrUnauthorized is returned when authentication fails during sync operations.
 var ErrUnauthorized = errors.New("unauthorized")
 
 var syncHTTPClient = &http.Client{
@@ -28,17 +29,24 @@ var syncHTTPClient = &http.Client{
 	},
 }
 
+// SyncClient handles HTTPS communication with peer devices for pull/push operations.
+// It uses TLS 1.3 with certificate verification for secure peer communication.
 type SyncClient struct {
 	client *http.Client
 	store  *storage.Storage
 }
 
+// PeerState represents the synchronization state of a peer device.
+// It contains the peer's last operation ID and identification information.
 type PeerState struct {
 	LastOperationID string `json:"last_operation_id"`
 	DeviceID        string `json:"device_id"`
 	DeviceName      string `json:"device_name"`
 }
 
+// NewSyncClient creates a sync client with TLS-configured HTTP transport.
+// The client uses mTLS for authentication and verifies peer certificates.
+// Returns error if TLS configuration cannot be loaded.
 func NewSyncClient(store *storage.Storage) (*SyncClient, error) {
 	certMgr := NewCertificateManager(store.GetDB())
 	tlsConfig, err := certMgr.GetTLSConfig(false)
@@ -64,6 +72,9 @@ func NewSyncClient(store *storage.Storage) (*SyncClient, error) {
 	}, nil
 }
 
+// GetPeerState retrieves the current synchronization state from a peer device.
+// Returns the peer's last operation ID, device ID, and device name.
+// Uses HTTPS with 30-second timeout. Returns error on network failure or non-200 response.
 func (sc *SyncClient) GetPeerState(peer *Peer) (*PeerState, error) {
 	url := fmt.Sprintf("https://%s/sync/state", peer.Address)
 
@@ -93,6 +104,10 @@ func (sc *SyncClient) GetPeerState(peer *Peer) (*PeerState, error) {
 	return &state, nil
 }
 
+// PullOperations retrieves new operations from a peer since the specified operation ID.
+// The secret parameter authenticates the request via X-Doit-Secret header.
+// Operations are returned sorted by timestamp ascending.
+// Uses exponential backoff retry (up to 7 attempts). Returns error on auth failure or network error.
 func (sc *SyncClient) PullOperations(peer *Peer, secret string, since string) ([]Operation, error) {
 	url := fmt.Sprintf("https://%s/sync/operations?since=%s", peer.Address, since)
 
@@ -139,6 +154,9 @@ func (sc *SyncClient) PullOperations(peer *Peer, secret string, since string) ([
 	return operations, nil
 }
 
+// PushOperations sends local operations to a peer device.
+// The secret parameter authenticates the request. Empty operation list is a no-op.
+// Uses exponential backoff retry (up to 7 attempts). Returns error on auth failure or network error.
 func (sc *SyncClient) PushOperations(peer *Peer, secret string, ops []Operation) error {
 	if len(ops) == 0 {
 		return nil
@@ -184,8 +202,11 @@ func (sc *SyncClient) PushOperations(peer *Peer, secret string, ops []Operation)
 	})
 }
 
+// InitialSync performs a bidirectional sync with a peer device.
+// It pulls new operations from the peer, pushes local unsynced operations,
+// and marks synced operations. Requires prior pairing to have peer secret.
+// Returns error if not paired, network failure, or operation application fails.
 func (sc *SyncClient) InitialSync(peer *Peer) error {
-	// Get peer secret from database (must be paired first via `doit sync pair`)
 	secret, err := sc.store.GetPeerSecret(peer.ID)
 	if err != nil {
 		return fmt.Errorf("not paired with %s. Pair devices using 'doit sync show' and 'doit sync pair'", peer.Name)

@@ -14,6 +14,9 @@ import (
 	"github.com/akr411/doit/internal/storage"
 )
 
+// SyncServer handles HTTPS requests for P2P synchronization.
+// It serves the /sync/operations, /sync/state, and /sync/pair endpoints.
+// All traffic is encrypted with TLS 1.3 and authenticated with mTLS.
 type SyncServer struct {
 	server     *http.Server
 	store      *storage.Storage
@@ -26,24 +29,31 @@ type SyncServer struct {
 	port       int
 }
 
+// OperationsResponse is the JSON response for GET /sync/operations.
 type OperationsResponse struct {
 	Operations []Operation `json:"operations"`
 }
 
+// OperationsRequest is the JSON request body for POST /sync/operations.
 type OperationsRequest struct {
 	Operations []Operation `json:"operations"`
 }
 
+// AppliedResponse confirms how many operations were successfully applied.
 type AppliedResponse struct {
 	Applied int `json:"applied"`
 }
 
+// StateResponse returns the sync state for GET /sync/state endpoint.
 type StateResponse struct {
 	LastOperationID string `json:"last_operation_id"`
 	DeviceID        string `json:"device_id"`
 	DeviceName      string `json:"device_name"`
 }
 
+// NewSyncServer creates an HTTPS sync server with TLS and pairing support.
+// Initializes the shared secret, device ID, and pairing manager.
+// Returns error if secret generation or device ID retrieval fails.
 func NewSyncServer(store *storage.Storage, peerMgr *PeerManager) (*SyncServer, error) {
 	secret, err := getOrGenerateSecret(store.GetDB())
 	if err != nil {
@@ -68,6 +78,10 @@ func NewSyncServer(store *storage.Storage, peerMgr *PeerManager) (*SyncServer, e
 	}, nil
 }
 
+// Start launches the HTTPS sync server with TLS 1.3 and mTLS.
+// Generates TLS certificate if needed, tries binding to port, port+1, port+2.
+// Registers handlers for /sync/operations, /sync/state, and /sync/pair endpoints.
+// Returns error if TLS setup fails or all ports are in use.
 func (ss *SyncServer) Start(port int) error {
 	certMgr := NewCertificateManager(ss.store.GetDB())
 	if err := certMgr.GenerateSelfSignedCert(ss.deviceID); err != nil {
@@ -122,10 +136,14 @@ func (ss *SyncServer) Start(port int) error {
 		ports[0], ports[len(ports)-1], lastErr)
 }
 
+// GetPort returns the port the server is listening on.
+// Returns 0 if server is not started.
 func (ss *SyncServer) GetPort() int {
 	return ss.port
 }
 
+// Stop gracefully shuts down the HTTPS server.
+// Returns error if shutdown fails. Safe to call multiple times.
 func (ss *SyncServer) Stop() error {
 	if ss.server == nil {
 		return nil

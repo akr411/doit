@@ -16,14 +16,19 @@ const (
 	MagicNumber   = 0xD01744A7
 )
 
+// LocalDiscoveryStore defines the storage interface required by local discovery.
 type LocalDiscoveryStore interface {
 	GetDB() *sql.DB
 }
 
+// LocalDiscoveryPeerManager defines the peer management interface for discovery.
 type LocalDiscoveryPeerManager interface {
 	AddOrUpdatePeer(peer *Peer) error
 }
 
+// LocalDiscovery handles UDP broadcast for discovering peers on the local network.
+// It broadcasts announcement packets every 10 seconds and listens for peer announcements.
+// Supports both IPv4 and IPv6 on port 49151.
 type LocalDiscovery struct {
 	store   LocalDiscoveryStore
 	peerMgr LocalDiscoveryPeerManager
@@ -35,6 +40,8 @@ type LocalDiscovery struct {
 	running bool
 }
 
+// AnnouncementPacket is the UDP broadcast message for peer discovery.
+// Contains device identification and sync port information.
 type AnnouncementPacket struct {
 	Magic    uint32
 	DeviceID string
@@ -42,6 +49,7 @@ type AnnouncementPacket struct {
 	Name     string
 }
 
+// NewLocalDiscovery creates a local discovery service for the given store and peer manager.
 func NewLocalDiscovery(store LocalDiscoveryStore, peerMgr LocalDiscoveryPeerManager) *LocalDiscovery {
 	return &LocalDiscovery{
 		store:   store,
@@ -50,6 +58,9 @@ func NewLocalDiscovery(store LocalDiscoveryStore, peerMgr LocalDiscoveryPeerMana
 	}
 }
 
+// Start launches UDP broadcast discovery on IPv4 and IPv6.
+// Binds to port 49151, starts announcement and receive loops.
+// Returns error if already running or UDP binding fails.
 func (ld *LocalDiscovery) Start(port int) error {
 	ld.mu.Lock()
 	if ld.running {
@@ -96,6 +107,9 @@ func (ld *LocalDiscovery) Start(port int) error {
 	return nil
 }
 
+// Stop gracefully shuts down local discovery.
+// Closes UDP connections and stops announcement/receive loops.
+// Safe to call multiple times.
 func (ld *LocalDiscovery) Stop() error {
 	ld.mu.Lock()
 	if !ld.running {
@@ -252,6 +266,9 @@ func (ld *LocalDiscovery) processPacket(data []byte, srcIP net.IP, ourID string)
 	}
 }
 
+// Marshal serializes the announcement packet to bytes for UDP broadcast.
+// Format: 4-byte magic | 36-byte device ID | 2-byte port | 1-byte name length | name.
+// Returns error if device ID is not 36 chars or name exceeds 255 chars.
 func (ap *AnnouncementPacket) Marshal() ([]byte, error) {
 	buf := new(bytes.Buffer)
 
@@ -277,6 +294,9 @@ func (ap *AnnouncementPacket) Marshal() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// UnmarshalAnnouncement deserializes UDP broadcast data into an announcement packet.
+// Validates magic number (0xD01744A7) and packet size (minimum 43 bytes).
+// Returns error if packet is malformed or magic number doesn't match.
 func UnmarshalAnnouncement(data []byte) (*AnnouncementPacket, error) {
 	if len(data) < 43 {
 		return nil, fmt.Errorf("packet too small: %d bytes", len(data))

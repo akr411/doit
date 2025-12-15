@@ -6,12 +6,15 @@ import (
 	"time"
 )
 
+// CleanupStats records the results of a cleanup operation.
 type CleanupStats struct {
 	TombstonesDeleted int
 	OperationsDeleted int
 	BytesFreed        int64
 }
 
+// CleanupSyncData removes old synced operations and tombstones based on retention policies.
+// If aggressive is true, bypasses auto_cleanup_enabled check. Returns cleanup statistics.
 func (s *Storage) CleanupSyncData(aggressive bool) (*CleanupStats, error) {
 	var syncEnabled string
 	err := s.db.QueryRow("SELECT value FROM config WHERE key='sync_enabled'").Scan(&syncEnabled)
@@ -112,6 +115,7 @@ func (s *Storage) cleanupOperations(aggressive bool) (int, error) {
 	return int(rows), nil
 }
 
+// ShouldRunCleanup checks if enough time has passed since last cleanup.
 func (s *Storage) ShouldRunCleanup() bool {
 	var syncEnabled string
 	err := s.db.QueryRow("SELECT value FROM config WHERE key='sync_enabled'").Scan(&syncEnabled)
@@ -139,6 +143,7 @@ func (s *Storage) ShouldRunCleanup() bool {
 	return time.Now().Unix() >= nextCleanup
 }
 
+// GetCleanupStats returns current sync statistics including cleanable data counts.
 func (s *Storage) GetCleanupStats() (SyncStats, error) {
 	var stats SyncStats
 
@@ -271,6 +276,7 @@ func (s *Storage) getCleanupIntervalHours() int {
 	return h
 }
 
+// SetAutoCleanupEnabled enables or disables automatic cleanup.
 func (s *Storage) SetAutoCleanupEnabled(enabled bool) error {
 	value := "false"
 	if enabled {

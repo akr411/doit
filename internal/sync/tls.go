@@ -15,14 +15,21 @@ import (
 	"time"
 )
 
+// CertificateManager handles TLS certificate generation, storage, and verification.
+// It manages Ed25519 self-signed certificates with SHA256 fingerprint pinning for mTLS.
 type CertificateManager struct {
 	db *sql.DB
 }
 
+// NewCertificateManager creates a certificate manager for the given database.
 func NewCertificateManager(db *sql.DB) *CertificateManager {
 	return &CertificateManager{db: db}
 }
 
+// GenerateSelfSignedCert creates an Ed25519 self-signed certificate for the device.
+// The certificate is valid for 10 years and includes the device ID in the Common Name.
+// Stores the certificate, private key, and SHA256 fingerprint in config table.
+// Returns nil if certificate already exists. Returns error if generation or storage fails.
 func (cm *CertificateManager) GenerateSelfSignedCert(deviceID string) error {
 	var exists bool
 	err := cm.db.QueryRow(`
@@ -84,6 +91,11 @@ func (cm *CertificateManager) GenerateSelfSignedCert(deviceID string) error {
 	return err
 }
 
+// GetTLSConfig returns a TLS configuration for server or client use.
+// Server config enforces mTLS with RequireAnyClientCert and peer certificate verification.
+// Client config skips hostname verification but verifies peer certificate fingerprint.
+// Both configs use TLS 1.3 with AES-256-GCM and ChaCha20-Poly1305 ciphers.
+// Returns error if certificate not found in config.
 func (cm *CertificateManager) GetTLSConfig(isServer bool) (*tls.Config, error) {
 	var certPEM, keyPEM string
 	err := cm.db.QueryRow(`
@@ -154,6 +166,9 @@ func (cm *CertificateManager) verifyPeerCert(rawCerts [][]byte, verifiedChains [
 	return nil
 }
 
+// SavePeerCertificate stores a peer's certificate fingerprint for verification.
+// The fingerprint is saved in peer_certificates table keyed by device ID.
+// Used during pairing to enable subsequent mTLS verification.
 func (cm *CertificateManager) SavePeerCertificate(peerID, fingerprint string) error {
 	_, err := cm.db.Exec(`
 		INSERT OR REPLACE INTO peer_certificates (device_id, fingerprint)
@@ -162,6 +177,8 @@ func (cm *CertificateManager) SavePeerCertificate(peerID, fingerprint string) er
 	return err
 }
 
+// GetFingerprint retrieves this device's TLS certificate SHA256 fingerprint.
+// Returns the 64-character hex string or error if not found in config.
 func (cm *CertificateManager) GetFingerprint() (string, error) {
 	var fingerprint string
 	err := cm.db.QueryRow(`

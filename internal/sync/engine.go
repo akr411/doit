@@ -9,6 +9,9 @@ import (
 	"github.com/akr411/doit/internal/storage"
 )
 
+// SyncEngine coordinates all P2P synchronization components.
+// It manages the sync server, client, local discovery, and peer management.
+// The engine runs a background sync loop when started.
 type SyncEngine struct {
 	store     *storage.Storage
 	discovery *LocalDiscovery
@@ -20,6 +23,9 @@ type SyncEngine struct {
 	running   bool
 }
 
+// NewSyncEngine creates a sync engine with all required components.
+// Initializes the sync server (HTTPS), client (with TLS), peer manager, and local discovery.
+// Returns error if sync is not enabled or component initialization fails.
 func NewSyncEngine(store *storage.Storage) (*SyncEngine, error) {
 	peerMgr := NewPeerManager(store)
 
@@ -45,6 +51,9 @@ func NewSyncEngine(store *storage.Storage) (*SyncEngine, error) {
 	}, nil
 }
 
+// Start launches the sync engine, starting the server, discovery, and sync loop.
+// It loads active peers, starts the HTTPS server, begins UDP discovery, and runs
+// the background sync loop. Returns error if already running or if any component fails to start.
 func (se *SyncEngine) Start() error {
 	se.mu.Lock()
 	if se.running {
@@ -77,6 +86,9 @@ func (se *SyncEngine) Start() error {
 	return nil
 }
 
+// Stop gracefully shuts down the sync engine.
+// Stops the sync loop, discovery service, and server.
+// Safe to call multiple times - no-op if not running.
 func (se *SyncEngine) Stop() error {
 	se.mu.Lock()
 	if !se.running {
@@ -102,6 +114,8 @@ func (se *SyncEngine) Stop() error {
 	return nil
 }
 
+// IsRunning returns true if the sync engine is currently running.
+// Thread-safe check using read lock.
 func (se *SyncEngine) IsRunning() bool {
 	se.mu.RLock()
 	defer se.mu.RUnlock()

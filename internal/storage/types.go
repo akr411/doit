@@ -1,5 +1,7 @@
 package storage
 
+// OperationData represents a CRDT operation as stored in the database.
+// Used for type-safe operation retrieval instead of map[string]interface{}.
 type OperationData struct {
 	ID        string
 	Type      string
@@ -10,6 +12,8 @@ type OperationData struct {
 	Synced    int
 }
 
+// SyncStats contains synchronization statistics and cleanup information.
+// Returned by GetCleanupStats for display in sync status command.
 type SyncStats struct {
 	TotalOperations      int
 	SyncedOperations     int

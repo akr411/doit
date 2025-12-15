@@ -8,6 +8,8 @@ import (
 	"time"
 )
 
+// PairingCode represents a temporary 6-digit code for device pairing.
+// Codes expire after 15 minutes and are single-use for security.
 type PairingCode struct {
 	Code      string
 	CreatedAt int64
@@ -15,11 +17,14 @@ type PairingCode struct {
 	Used      bool
 }
 
+// PairingManager handles pairing code generation and validation.
+// It manages the pairing_codes table and enforces expiration/single-use policies.
 type PairingManager struct {
 	db     *sql.DB
 	secret string
 }
 
+// NewPairingManager creates a pairing manager for the given database and shared secret.
 func NewPairingManager(db *sql.DB, secret string) *PairingManager {
 	return &PairingManager{
 		db:     db,
@@ -27,6 +32,9 @@ func NewPairingManager(db *sql.DB, secret string) *PairingManager {
 	}
 }
 
+// GenerateCode creates a new 6-digit pairing code in format "XXX-XXX".
+// The code expires after 15 minutes and is stored in the pairing_codes table.
+// Returns the generated code or error if random generation/database insert fails.
 func (pm *PairingManager) GenerateCode() (*PairingCode, error) {
 	max := big.NewInt(1000000)
 	n, err := rand.Int(rand.Reader, max)
@@ -55,6 +63,9 @@ func (pm *PairingManager) GenerateCode() (*PairingCode, error) {
 	return pc, err
 }
 
+// ValidateCode checks if a pairing code is valid, not expired, and not used.
+// The code must be in format "XXX-XXX" (7 characters with hyphen at position 3).
+// Returns (true, nil) if valid, (false, error) otherwise with specific error message.
 func (pm *PairingManager) ValidateCode(code string) (bool, error) {
 	if len(code) != 7 {
 		return false, fmt.Errorf("invalid code format")
@@ -89,6 +100,9 @@ func (pm *PairingManager) ValidateCode(code string) (bool, error) {
 	return true, nil
 }
 
+// MarkUsed marks a pairing code as used, preventing reuse.
+// The code format is validated before marking.
+// Returns error if format is invalid or database update fails.
 func (pm *PairingManager) MarkUsed(code string) error {
 	if len(code) != 7 {
 		return fmt.Errorf("invalid code format")
@@ -101,6 +115,9 @@ func (pm *PairingManager) MarkUsed(code string) error {
 	return err
 }
 
+// CleanupExpired removes expired pairing codes from the database.
+// Should be called periodically to prevent table growth.
+// Deletes all codes where expires_at < current time.
 func (pm *PairingManager) CleanupExpired() error {
 	now := time.Now().UnixNano()
 	_, err := pm.db.Exec(`

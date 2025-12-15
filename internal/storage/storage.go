@@ -13,10 +13,14 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+// Storage provides SQLite-backed persistence for all application data.
+// Uses WAL mode for concurrent access and maintains the complete schema.
 type Storage struct {
 	db *sql.DB
 }
 
+// Peer represents a discovered or paired device on the local network.
+// Tracks connection status, last seen time, and network address.
 type Peer struct {
 	ID        string
 	Name      string
@@ -26,6 +30,8 @@ type Peer struct {
 	CreatedAt int64
 }
 
+// SyncState tracks synchronization progress with a specific peer device.
+// Records the last synced operation ID and operation counts in each direction.
 type SyncState struct {
 	PeerID             string
 	LastOperationID    string
@@ -46,6 +52,9 @@ var getDBPath = func() (string, error) {
 	return filepath.Join(dataDir, "doit", "doit.db"), nil
 }
 
+// New creates a new storage instance with SQLite database at the default path.
+// Database location: $XDG_DATA_HOME/doit/doit.db or ~/.local/share/doit/doit.db
+// Initializes schema and enables WAL mode. Returns error if database creation fails.
 func New() (*Storage, error) {
 	dbPath, err := getDBPath()
 	if err != nil {
@@ -221,6 +230,9 @@ func (s *Storage) runMigrations() error {
 	return nil
 }
 
+// SaveTodo saves a new todo to the database.
+// If sync is enabled, creates a CREATE operation for CRDT replication.
+// Uses transaction for atomicity. Returns error if validation or insert fails.
 func (s *Storage) SaveTodo(todo *models.Todo) error {
 	if todo.ID == "" {
 		todo.ID = uuid.New().String()
@@ -291,6 +303,7 @@ func (s *Storage) SaveTodo(todo *models.Todo) error {
 	return tx.Commit()
 }
 
+// GetTodo retrieves a todo by ID. Returns nil if not found or deleted.
 func (s *Storage) GetTodo(id string) (*models.Todo, error) {
 	var todo models.Todo
 	var completed int
@@ -308,6 +321,7 @@ func (s *Storage) GetTodo(id string) (*models.Todo, error) {
 	return &todo, nil
 }
 
+// GetAllTodos returns all non-deleted todos sorted by creation time.
 func (s *Storage) GetAllTodos() ([]*models.Todo, error) {
 	rows, err := s.db.Query(`
 		SELECT id, task, note, COALESCE(deadline, 0), completed, created_at, updated_at
@@ -338,6 +352,7 @@ func (s *Storage) GetAllTodos() ([]*models.Todo, error) {
 	return todos, rows.Err()
 }
 
+// UpdateTodo updates an existing todo. Creates UPDATE operation if sync enabled.
 func (s *Storage) UpdateTodo(todo *models.Todo) error {
 	if err := todo.Validate(); err != nil {
 		return err
@@ -399,6 +414,7 @@ func (s *Storage) UpdateTodo(todo *models.Todo) error {
 	return tx.Commit()
 }
 
+// CompleteTodo toggles todo completion status. Creates COMPLETE operation if sync enabled.
 func (s *Storage) CompleteTodo(id string, completed bool) error {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -467,6 +483,7 @@ func (s *Storage) CompleteTodo(id string, completed bool) error {
 	return tx.Commit()
 }
 
+// DeleteTodo soft deletes a todo (sets deleted=1). Creates DELETE operation if sync enabled.
 func (s *Storage) DeleteTodo(id string) error {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -513,11 +530,13 @@ func (s *Storage) DeleteTodo(id string) error {
 	return tx.Commit()
 }
 
+// HardDeleteTodo permanently removes a todo from database. No sync operation created.
 func (s *Storage) HardDeleteTodo(id string) error {
 	_, err := s.db.Exec("DELETE FROM todos WHERE id = ?", id)
 	return err
 }
 
+// GetStreak retrieves the current streak statistics.
 func (s *Storage) GetStreak() (*models.Streak, error) {
 	var streak models.Streak
 	err := s.db.QueryRow(`
@@ -532,6 +551,7 @@ func (s *Storage) GetStreak() (*models.Streak, error) {
 	return &streak, nil
 }
 
+// UpdateStreak updates streak statistics.
 func (s *Storage) UpdateStreak(streak *models.Streak) error {
 	_, err := s.db.Exec(`
 		UPDATE streaks
@@ -542,12 +562,14 @@ func (s *Storage) UpdateStreak(streak *models.Streak) error {
 	return err
 }
 
+// GetConfig retrieves a config value by key.
 func (s *Storage) GetConfig(key string) (string, error) {
 	var value string
 	err := s.db.QueryRow("SELECT value FROM config WHERE key = ?", key).Scan(&value)
 	return value, err
 }
 
+// SetConfig sets or updates a config key-value pair.
 func (s *Storage) SetConfig(key, value string) error {
 	_, err := s.db.Exec(`
 		INSERT INTO config (key, value) VALUES (?, ?)
@@ -556,6 +578,7 @@ func (s *Storage) SetConfig(key, value string) error {
 	return err
 }
 
+// CleanupOldCompleted removes old completed todos beyond retention limit.
 func (s *Storage) CleanupOldCompleted() error {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -625,6 +648,7 @@ func (s *Storage) CleanupOldCompleted() error {
 	return tx.Commit()
 }
 
+// SaveOperation saves a CRDT operation to the operations table.
 func (s *Storage) SaveOperation(id, opType, todoID string, data []byte, timestamp int64, deviceID string) error {
 	_, err := s.db.Exec(`
 		INSERT INTO operations (id, type, todo_id, data, timestamp, device_id, synced)
@@ -633,6 +657,7 @@ func (s *Storage) SaveOperation(id, opType, todoID string, data []byte, timestam
 	return err
 }
 
+// GetOperations retrieves unsynced operations since the specified operation ID.
 func (s *Storage) GetOperations(since string) ([]OperationData, error) {
 	var rows *sql.Rows
 	var err error
@@ -676,6 +701,7 @@ func (s *Storage) GetOperations(since string) ([]OperationData, error) {
 	return operations, rows.Err()
 }
 
+// GetOperationsSince returns all operations after the given timestamp.
 func (s *Storage) GetOperationsSince(timestamp int64) ([]OperationData, error) {
 	rows, err := s.db.Query(`
 		SELECT id, type, todo_id, data, timestamp, device_id, synced
@@ -700,6 +726,7 @@ func (s *Storage) GetOperationsSince(timestamp int64) ([]OperationData, error) {
 	return operations, rows.Err()
 }
 
+// GetLastOperationID returns the most recent operation ID by timestamp.
 func (s *Storage) GetLastOperationID() (string, error) {
 	var id string
 	err := s.db.QueryRow(`
@@ -715,6 +742,7 @@ func (s *Storage) GetLastOperationID() (string, error) {
 	return id, err
 }
 
+// MarkOperationsSynced marks multiple operations as synced (synced=1).
 func (s *Storage) MarkOperationsSynced(ids []string) error {
 	if len(ids) == 0 {
 		return nil
@@ -736,10 +764,13 @@ func (s *Storage) MarkOperationsSynced(ids []string) error {
 	return tx.Commit()
 }
 
+// GetDB returns the underlying SQL database connection.
+// Used by sync components for direct database access.
 func (s *Storage) GetDB() *sql.DB {
 	return s.db
 }
 
+// AddOrUpdatePeer adds or updates a peer in the database.
 func (s *Storage) AddOrUpdatePeer(peer *Peer) error {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -764,6 +795,7 @@ func (s *Storage) AddOrUpdatePeer(peer *Peer) error {
 	return tx.Commit()
 }
 
+// GetPeers returns all known peers.
 func (s *Storage) GetPeers() ([]*Peer, error) {
 	rows, err := s.db.Query(`
 		SELECT id, name, address, last_seen, status, created_at
@@ -788,6 +820,7 @@ func (s *Storage) GetPeers() ([]*Peer, error) {
 	return peers, rows.Err()
 }
 
+// GetActivePeers returns peers with active status (discovered/connected/syncing).
 func (s *Storage) GetActivePeers() ([]*Peer, error) {
 	rows, err := s.db.Query(`
 		SELECT id, name, address, last_seen, status, created_at
@@ -813,6 +846,7 @@ func (s *Storage) GetActivePeers() ([]*Peer, error) {
 	return peers, rows.Err()
 }
 
+// UpdatePeerStatus updates a peer's status.
 func (s *Storage) UpdatePeerStatus(id string, status string) error {
 	_, err := s.db.Exec("UPDATE peers SET status = ? WHERE id = ?", status, id)
 	if err != nil {
@@ -821,6 +855,7 @@ func (s *Storage) UpdatePeerStatus(id string, status string) error {
 	return nil
 }
 
+// UpdatePeerLastSeen updates the last seen timestamp for a peer.
 func (s *Storage) UpdatePeerLastSeen(id string, timestamp int64) error {
 	_, err := s.db.Exec("UPDATE peers SET last_seen = ? WHERE id = ?", timestamp, id)
 	if err != nil {
@@ -829,6 +864,7 @@ func (s *Storage) UpdatePeerLastSeen(id string, timestamp int64) error {
 	return nil
 }
 
+// GetSyncState retrieves sync state for a specific peer.
 func (s *Storage) GetSyncState(peerID string) (*SyncState, error) {
 	state := &SyncState{PeerID: peerID}
 	err := s.db.QueryRow(`
@@ -848,6 +884,7 @@ func (s *Storage) GetSyncState(peerID string) (*SyncState, error) {
 	return state, nil
 }
 
+// UpdateSyncState updates sync state for a peer.
 func (s *Storage) UpdateSyncState(peerID string, state *SyncState) error {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -872,6 +909,7 @@ func (s *Storage) UpdateSyncState(peerID string, state *SyncState) error {
 	return tx.Commit()
 }
 
+// SavePeerSecret saves the shared secret for a paired peer.
 func (s *Storage) SavePeerSecret(peerID, secret string) error {
 	_, err := s.db.Exec(`
 		INSERT OR REPLACE INTO peer_secrets (peer_id, secret)
@@ -880,6 +918,7 @@ func (s *Storage) SavePeerSecret(peerID, secret string) error {
 	return err
 }
 
+// GetPeerSecret retrieves the shared secret for a peer.
 func (s *Storage) GetPeerSecret(peerID string) (string, error) {
 	var secret string
 	err := s.db.QueryRow(`
@@ -888,6 +927,7 @@ func (s *Storage) GetPeerSecret(peerID string) (string, error) {
 	return secret, err
 }
 
+// Close closes the database connection.
 func (s *Storage) Close() error {
 	return s.db.Close()
 }
