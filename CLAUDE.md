@@ -6,10 +6,10 @@ No servers, works offline, syncs automatically.
 
 ## Current Status
 
-**Complete**: Phase 0 (TUI), Phase 1 (CRDT), Phase 2 (Local Sync + Pairing)
-**Security**: Pairing codes ✓, TLS encryption pending
+**Complete**: Phase 0 (TUI), Phase 1 (CRDT), Phase 2 (Local Sync + Pairing), Phase 3 (TLS)
+**Security**: Pairing codes ✓, TLS 1.3 + mTLS ✓
 **Scope**: Local network only (WiFi/LAN)
-**Next**: Phase 3 - TLS encryption for public WiFi safety
+**Next**: Phase 4 - Polish & Testing
 
 Track: [TODO.md](TODO.md) | Architecture: [docs/SYNC_ARCHITECTURE.md](docs/SYNC_ARCHITECTURE.md)
 
@@ -43,28 +43,25 @@ Track: [TODO.md](TODO.md) | Architecture: [docs/SYNC_ARCHITECTURE.md](docs/SYNC_
 **Sync**:
 - CRDT with LWW conflict resolution
 - UDP broadcast discovery (port 49151)
-- HTTP sync server (port 49152) - **run via `doit sync daemon`**
+- HTTPS sync server (port 49152) - **run via `doit sync daemon`**
 - Pairing code system (6-digit, 15min expiry, single-use)
-- Per-peer secrets (stored in peer_secrets table)
+- Per-peer secrets + TLS certs (stored in peer_secrets, peer_certificates tables)
 
-**Tables**: todos, operations, peers, sync_state, peer_secrets, pairing_codes, config, streaks
+**Tables**: todos, operations, peers, sync_state, peer_secrets, peer_certificates, pairing_codes, config, streaks
 
 **Auto-cleanup**: 30-day retention (operations + tombstones), keeps last 10 ops per todo
 
 ---
 
-## Security (2025-12-09)
+## Security (2025-12-15)
 
-**Current** (Phase 1 + 2):
-- ✅ Pairing code system (no unauthenticated secret exposure)
+**Complete**:
+- ✅ Pairing code system (6-digit, 15min expiry, single-use)
 - ✅ Per-peer secrets
-- ⚠️ HTTP only (traffic visible on network)
-- ⚠️ Safe on trusted networks only
-
-**Phase 3 (Pending)**:
-- TLS 1.3 + mTLS (encrypt all traffic)
-- Certificate fingerprint pinning (prevent MITM)
-- Safe on public WiFi
+- ✅ TLS 1.3 + mTLS (all traffic encrypted)
+- ✅ Ed25519 self-signed certs
+- ✅ Certificate fingerprint pinning (prevents MITM)
+- ✅ Safe on public WiFi
 
 **Security docs**: [docs/PAKE_TLS_ARCHITECTURE.md](docs/PAKE_TLS_ARCHITECTURE.md)
 
