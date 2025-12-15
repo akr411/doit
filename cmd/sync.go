@@ -182,9 +182,19 @@ func runSyncInit(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to get shared secret: %w", err)
 	}
 
+	deviceID, err := sync.GetDeviceID(store.GetDB())
+	if err != nil {
+		return fmt.Errorf("failed to get device ID: %w", err)
+	}
+
+	certMgr := sync.NewCertificateManager(store.GetDB())
+	if err := certMgr.GenerateSelfSignedCert(deviceID); err != nil {
+		return fmt.Errorf("failed to generate TLS cert: %w", err)
+	}
+
 	ui.PrintSuccess("✓ Sync enabled")
 	fmt.Printf("Device: %s\n", deviceName)
-	fmt.Printf("Port: %d (HTTP), %d (UDP discovery)\n", port, 49151)
+	fmt.Printf("Port: %d (HTTPS), %d (UDP discovery)\n", port, 49151)
 	fmt.Println()
 	fmt.Printf("Shared secret: %s\n", secret)
 	fmt.Println()
