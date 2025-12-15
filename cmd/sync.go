@@ -6,8 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"syscall"
 	"time"
 
+	"github.com/akr411/doit/internal/logging"
 	"github.com/akr411/doit/internal/sync"
 	"github.com/akr411/doit/internal/ui"
 	"github.com/spf13/cobra"
@@ -284,6 +289,22 @@ func runSyncDaemon(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("sync not enabled. Run: doit sync init")
 	}
 
+	dataDir, err := getDataDir()
+	if err != nil {
+		return fmt.Errorf("failed to get data directory: %w", err)
+	}
+
+	if err := logging.Init(dataDir, logging.INFO); err != nil {
+		return fmt.Errorf("failed to initialize logging: %w", err)
+	}
+	defer logging.Close()
+
+	pidFile := filepath.Join(dataDir, "doit-sync.pid")
+	if err := writePIDFile(pidFile); err != nil {
+		return fmt.Errorf("failed to write PID file: %w", err)
+	}
+	defer os.Remove(pidFile)
+
 	engine, err := sync.NewSyncEngine(store)
 	if err != nil {
 		return fmt.Errorf("failed to create sync engine: %w", err)
@@ -294,8 +315,16 @@ func runSyncDaemon(cmd *cobra.Command, args []string) error {
 	}
 
 	ui.PrintSuccess("✓ Sync daemon running (Ctrl+C to stop)")
+	logging.Info("Sync daemon started")
 
-	select {}
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	<-sigCh
+	logging.Info("Shutdown signal received, stopping gracefully")
+	ui.PrintSuccess("\n✓ Sync daemon stopped")
+
+	return nil
 }
 
 func runSyncShow(cmd *cobra.Command, args []string) error {
@@ -480,6 +509,23 @@ var pairCmd = &cobra.Command{
 	Long:  "Pair with another device using pairing code",
 	Args:  cobra.ExactArgs(1),
 	RunE:  runSyncPair,
+}
+
+func getDataDir() (string, error) {
+	var dataDir string
+	if os.Getenv("XDG_DATA_HOME") != "" {
+		dataDir = os.Getenv("XDG_DATA_HOME")
+	} else if home, err := os.UserHomeDir(); err == nil {
+		dataDir = filepath.Join(home, ".local", "share")
+	} else {
+		return "", fmt.Errorf("failed to determine home directory: %w", err)
+	}
+	return filepath.Join(dataDir, "doit"), nil
+}
+
+func writePIDFile(path string) error {
+	pid := fmt.Sprintf("%d", os.Getpid())
+	return os.WriteFile(path, []byte(pid), 0644)
 }
 
 func init() {

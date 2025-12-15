@@ -318,6 +318,19 @@ func (m MainInteractive) View() string {
 	if streaksEnabled != "false" && streak != nil && streak.CurrentStreak > 0 {
 		title += fmt.Sprintf(" | Streak: %d days", streak.CurrentStreak)
 	}
+
+	var syncEnabled string
+	m.store.GetDB().QueryRow("SELECT value FROM config WHERE key='sync_enabled'").Scan(&syncEnabled)
+	if syncEnabled == "true" {
+		var peerCount int
+		m.store.GetDB().QueryRow("SELECT COUNT(*) FROM peers").Scan(&peerCount)
+		if peerCount > 0 {
+			title += fmt.Sprintf(" | ⟳ %d device%s", peerCount, map[bool]string{true: "", false: "s"}[peerCount == 1])
+		} else {
+			title += " | ⟳ No devices"
+		}
+	}
+
 	b.WriteString(TitleStyle.Render(title) + "\n\n")
 
 	now := time.Now().Unix()

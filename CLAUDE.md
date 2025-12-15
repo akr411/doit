@@ -6,10 +6,10 @@ No servers, works offline, syncs automatically.
 
 ## Current Status
 
-**Complete**: Phase 0 (TUI), Phase 1 (CRDT), Phase 2 (Local Sync + Pairing), Phase 3 (TLS)
+**Complete**: Phase 0-4 (TUI, CRDT, Pairing, TLS, Polish)
 **Security**: Pairing codes ✓, TLS 1.3 + mTLS ✓
 **Scope**: Local network only (WiFi/LAN)
-**Next**: Phase 4 - Polish & Testing
+**Production**: Ready for two-device testing
 
 Track: [TODO.md](TODO.md) | Architecture: [docs/SYNC_ARCHITECTURE.md](docs/SYNC_ARCHITECTURE.md)
 
@@ -64,6 +64,29 @@ Track: [TODO.md](TODO.md) | Architecture: [docs/SYNC_ARCHITECTURE.md](docs/SYNC_
 - ✅ Safe on public WiFi
 
 **Security docs**: [docs/PAKE_TLS_ARCHITECTURE.md](docs/PAKE_TLS_ARCHITECTURE.md)
+
+---
+
+## Phase 4 Features (2025-12-15)
+
+**Daemon**:
+- Signal handling (SIGTERM/SIGINT for graceful shutdown)
+- PID file management (~/.local/share/doit/doit-sync.pid)
+- Foreground service via `doit sync daemon`
+
+**Logging**:
+- Structured logs (DEBUG, INFO, WARN, ERROR)
+- Log file: ~/.local/share/doit/sync.log
+- Auto-rotation at 10MB (keeps sync.log.old)
+
+**Error Handling**:
+- Exponential backoff retry (1s → 60s)
+- Context cancellation support
+- Works offline always
+
+**UI**:
+- Sync indicator in TUI: "⟳ N devices" or "⟳ No devices"
+- Dynamic peer count in header
 
 ---
 
