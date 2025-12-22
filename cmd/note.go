@@ -29,8 +29,7 @@ var noteCmd = &cobra.Command{
 			return nil
 		}
 
-		// Display full note
-		fmt.Printf("%s\n\n", ui.TitleStyle.Render(todo.Task))
+		fmt.Printf("%s\n", ui.TitleStyle.Render(todo.Task))
 		fmt.Println(todo.Note)
 
 		return nil

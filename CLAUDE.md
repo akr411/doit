@@ -44,7 +44,7 @@ Track: [TODO.md](TODO.md) | Architecture: [docs/SYNC_ARCHITECTURE.md](docs/SYNC_
 - CRDT with LWW conflict resolution
 - UDP broadcast discovery (port 49151)
 - HTTPS sync server (port 49152) - **run via `doit sync daemon`**
-- Pairing code system (6-digit, 15min expiry, single-use)
+- Pairing code system (8-digit XXXX-XXXX, 5min expiry, single-use)
 - Per-peer secrets + TLS certs (stored in peer_secrets, peer_certificates tables)
 
 **Tables**: todos, operations, peers, sync_state, peer_secrets, peer_certificates, pairing_codes, config, streaks
@@ -53,15 +53,20 @@ Track: [TODO.md](TODO.md) | Architecture: [docs/SYNC_ARCHITECTURE.md](docs/SYNC_
 
 ---
 
-## Security (2025-12-15)
+## Security (2025-12-22)
 
 **Complete**:
-- ✅ Pairing code system (6-digit, 15min expiry, single-use)
-- ✅ Per-peer secrets
+- ✅ Pairing code system (8-digit, 5min expiry, single-use, atomic validation)
+- ✅ Per-peer secrets with constant-time comparison
 - ✅ TLS 1.3 + mTLS (all traffic encrypted)
 - ✅ Ed25519 self-signed certs
 - ✅ Certificate fingerprint pinning (prevents MITM)
-- ✅ Safe on public WiFi
+- ✅ Authenticated endpoints (sync/state requires auth)
+
+**Limitations**:
+- ⚠️ **LAN-only**: Designed for trusted home/office networks
+- ⚠️ **Not recommended for public WiFi**: UDP discovery is unauthenticated
+- ⚠️ No cross-network sync (no STUN/relay server)
 
 **Security docs**: [docs/PAKE_TLS_ARCHITECTURE.md](docs/PAKE_TLS_ARCHITECTURE.md)
 
@@ -94,7 +99,7 @@ Track: [TODO.md](TODO.md) | Architecture: [docs/SYNC_ARCHITECTURE.md](docs/SYNC_
 
 ```bash
 # Pairing (required before sync works)
-doit sync show              # Generate pairing code (15min expiry)
+doit sync show              # Generate pairing code (5min expiry)
 doit sync pair <code>       # Pair with device using code
 
 # Sync operations

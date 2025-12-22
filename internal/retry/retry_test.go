@@ -91,7 +91,7 @@ func TestRetryExponentialBackoff(t *testing.T) {
 	calls := 0
 
 	ctx := context.Background()
-	Do(ctx, cfg, func() error {
+	_ = Do(ctx, cfg, func() error {
 		calls++
 		return errors.New("keep failing")
 	})
@@ -115,7 +115,7 @@ func TestRetryMaxWait(t *testing.T) {
 	start := time.Now()
 
 	ctx := context.Background()
-	Do(ctx, cfg, func() error {
+	_ = Do(ctx, cfg, func() error {
 		return errors.New("fail")
 	})
 

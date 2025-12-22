@@ -85,7 +85,7 @@ func (m InteractiveComplete) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if todo.Note != "" {
 					lines := strings.Count(todo.Note, "\n") + 1
 					if lines > 10 {
-						RunNoteViewer(todo.Note)
+						_ = RunNoteViewer(todo.Note)
 						m.refresh()
 					} else {
 						m.expandedNote = m.cursor
@@ -108,10 +108,10 @@ func (m InteractiveComplete) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			for idx := range m.selected {
 				todo := m.todos[idx]
 				wasCompleted := todo.Completed
-				m.store.CompleteTodo(todo.ID, !todo.Completed)
+				_ = m.store.CompleteTodo(todo.ID, !todo.Completed)
 				if !wasCompleted {
 					completedCount++
-					if err := updateStreakForStore(m.store); err != nil {
+					if err := m.store.RecordCompletion(); err != nil {
 						m.warningMsg = fmt.Sprintf("Warning: %v", err)
 					}
 				} else {

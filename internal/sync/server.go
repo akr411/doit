@@ -7,26 +7,122 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"log"
+	"net"
 	"net/http"
+	"sync"
 	"time"
 
+	"github.com/akr411/doit/internal/logging"
 	"github.com/akr411/doit/internal/storage"
 )
+
+const (
+	maxRequestBodySize       = 10 << 20 // 10MB
+	maxOperationsPerPost     = 1000
+	pairingRateLimitWindow   = time.Minute
+	pairingRateLimitMax      = 5
+	syncRateLimitWindow      = time.Minute
+	syncRateLimitMax         = 100
+	rateLimiterCleanupPeriod = 5 * time.Minute
+)
+
+type rateLimiter struct {
+	mu       sync.Mutex
+	attempts map[string][]time.Time
+	window   time.Duration
+	maxReqs  int
+	stopCh   chan struct{}
+}
+
+func newRateLimiter(window time.Duration, maxReqs int) *rateLimiter {
+	rl := &rateLimiter{
+		attempts: make(map[string][]time.Time),
+		window:   window,
+		maxReqs:  maxReqs,
+		stopCh:   make(chan struct{}),
+	}
+	go rl.cleanupLoop()
+	return rl
+}
+
+func (rl *rateLimiter) stop() {
+	close(rl.stopCh)
+}
+
+func (rl *rateLimiter) cleanupLoop() {
+	ticker := time.NewTicker(rateLimiterCleanupPeriod)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			rl.cleanup()
+		case <-rl.stopCh:
+			return
+		}
+	}
+}
+
+func (rl *rateLimiter) cleanup() {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	now := time.Now()
+	cutoff := now.Add(-rl.window)
+
+	for ip, times := range rl.attempts {
+		var recent []time.Time
+		for _, t := range times {
+			if t.After(cutoff) {
+				recent = append(recent, t)
+			}
+		}
+		if len(recent) == 0 {
+			delete(rl.attempts, ip)
+		} else {
+			rl.attempts[ip] = recent
+		}
+	}
+}
+
+func (rl *rateLimiter) allow(ip string) bool {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	now := time.Now()
+	cutoff := now.Add(-rl.window)
+
+	var recent []time.Time
+	for _, t := range rl.attempts[ip] {
+		if t.After(cutoff) {
+			recent = append(recent, t)
+		}
+	}
+
+	if len(recent) >= rl.maxReqs {
+		rl.attempts[ip] = recent
+		return false
+	}
+
+	rl.attempts[ip] = append(recent, now)
+	return true
+}
 
 // SyncServer handles HTTPS requests for P2P synchronization.
 // It serves the /sync/operations, /sync/state, and /sync/pair endpoints.
 // All traffic is encrypted with TLS 1.3 and authenticated with mTLS.
 type SyncServer struct {
-	server     *http.Server
-	store      *storage.Storage
-	peerMgr    *PeerManager
-	pairingMgr *PairingManager
-	secret     string
-	deviceID   string
-	deviceName string
-	errCh      chan error
-	port       int
+	server            *http.Server
+	store             *storage.Storage
+	peerMgr           *PeerManager
+	pairingMgr        *PairingManager
+	secret            string
+	deviceID          string
+	deviceName        string
+	errCh             chan error
+	port              int
+	pairingRateLimiter *rateLimiter
+	syncRateLimiter    *rateLimiter
 }
 
 // OperationsResponse is the JSON response for GET /sync/operations.
@@ -69,12 +165,14 @@ func NewSyncServer(store *storage.Storage, peerMgr *PeerManager) (*SyncServer, e
 	pairingMgr := NewPairingManager(store.GetDB(), secret)
 
 	return &SyncServer{
-		store:      store,
-		peerMgr:    peerMgr,
-		pairingMgr: pairingMgr,
-		secret:     secret,
-		deviceID:   deviceID,
-		deviceName: deviceName,
+		store:              store,
+		peerMgr:            peerMgr,
+		pairingMgr:         pairingMgr,
+		secret:             secret,
+		deviceID:           deviceID,
+		deviceName:         deviceName,
+		pairingRateLimiter: newRateLimiter(pairingRateLimitWindow, pairingRateLimitMax),
+		syncRateLimiter:    newRateLimiter(syncRateLimitWindow, syncRateLimitMax),
 	}, nil
 }
 
@@ -84,8 +182,12 @@ func NewSyncServer(store *storage.Storage, peerMgr *PeerManager) (*SyncServer, e
 // Returns error if TLS setup fails or all ports are in use.
 func (ss *SyncServer) Start(port int) error {
 	certMgr := NewCertificateManager(ss.store.GetDB())
-	if err := certMgr.GenerateSelfSignedCert(ss.deviceID); err != nil {
-		return fmt.Errorf("failed to generate TLS cert: %w", err)
+	regenerated, err := certMgr.RegenerateCertIfExpired(ss.deviceID)
+	if err != nil {
+		return fmt.Errorf("failed to check/generate TLS cert: %w", err)
+	}
+	if regenerated {
+		logging.Info(" TLS certificate regenerated")
 	}
 
 	tlsConfig, err := certMgr.GetTLSConfig(true)
@@ -96,7 +198,7 @@ func (ss *SyncServer) Start(port int) error {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/sync/operations", ss.authMiddleware(ss.handleOperations))
-	mux.HandleFunc("/sync/state", ss.handleGetState)
+	mux.HandleFunc("/sync/state", ss.authMiddleware(ss.handleGetState))
 	mux.HandleFunc("/sync/pair", ss.handlePair)
 
 	ports := []int{port, port + 1, port + 2}
@@ -104,8 +206,13 @@ func (ss *SyncServer) Start(port int) error {
 
 	var lastErr error
 	for _, p := range ports {
+		ln, err := net.Listen("tcp", fmt.Sprintf(":%d", p))
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
 		srv := &http.Server{
-			Addr:         fmt.Sprintf(":%d", p),
 			Handler:      mux,
 			TLSConfig:    tlsConfig,
 			ReadTimeout:  15 * time.Second,
@@ -113,23 +220,16 @@ func (ss *SyncServer) Start(port int) error {
 			IdleTimeout:  60 * time.Second,
 		}
 
-		go func(server *http.Server) {
-			if err := server.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
+		go func(server *http.Server, listener net.Listener) {
+			if err := server.ServeTLS(listener, "", ""); err != nil && err != http.ErrServerClosed {
 				ss.errCh <- err
 			}
-		}(srv)
+		}(srv, ln)
 
-		select {
-		case err := <-ss.errCh:
-			lastErr = err
-			srv.Close()
-			continue
-		case <-time.After(100 * time.Millisecond):
-			ss.server = srv
-			ss.port = p
-			log.Printf("HTTPS sync server started on port %d", p)
-			return nil
-		}
+		ss.server = srv
+		ss.port = p
+		logging.Info("HTTPS sync server started on port %d", p)
+		return nil
 	}
 
 	return fmt.Errorf("failed to start server on ports %d-%d: %w. Set custom port: doit config sync_port <port>",
@@ -145,6 +245,13 @@ func (ss *SyncServer) GetPort() int {
 // Stop gracefully shuts down the HTTPS server.
 // Returns error if shutdown fails. Safe to call multiple times.
 func (ss *SyncServer) Stop() error {
+	if ss.pairingRateLimiter != nil {
+		ss.pairingRateLimiter.stop()
+	}
+	if ss.syncRateLimiter != nil {
+		ss.syncRateLimiter.stop()
+	}
+
 	if ss.server == nil {
 		return nil
 	}
@@ -167,6 +274,13 @@ func (ss *SyncServer) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func (ss *SyncServer) handleOperations(w http.ResponseWriter, r *http.Request) {
+	clientIP := ss.getClientIP(r)
+	if !ss.syncRateLimiter.allow(clientIP) {
+		logging.Warn(" Rate limit exceeded for sync from %s", clientIP)
+		http.Error(w, "Too many sync requests, try again later", http.StatusTooManyRequests)
+		return
+	}
+
 	switch r.Method {
 	case http.MethodGet:
 		ss.handleGetOperations(w, r)
@@ -182,40 +296,38 @@ func (ss *SyncServer) handleGetOperations(w http.ResponseWriter, r *http.Request
 
 	ops, err := ss.store.GetOperations(since)
 	if err != nil {
-		log.Printf("Failed to get operations: %v", err)
+		logging.Warn("Failed to get operations: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
-	operations := make([]Operation, 0, len(ops))
-	for _, opData := range ops {
-		op := Operation{
-			ID:        opData.ID,
-			Type:      opData.Type,
-			TodoID:    opData.TodoID,
-			Data:      []byte(opData.Data),
-			Timestamp: opData.Timestamp,
-			DeviceID:  opData.DeviceID,
-		}
-		operations = append(operations, op)
-	}
+	operations := OperationsFromData(ops)
 
 	response := OperationsResponse{Operations: operations}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		logging.Warn("Failed to encode operations response: %v", err)
+	}
 }
 
 func (ss *SyncServer) handlePostOperations(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodySize)
+
 	var req OperationsRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		http.Error(w, "Invalid JSON or request too large", http.StatusBadRequest)
+		return
+	}
+
+	if len(req.Operations) > maxOperationsPerPost {
+		http.Error(w, "Too many operations", http.StatusBadRequest)
 		return
 	}
 
 	applied := 0
 	for _, op := range req.Operations {
-		if err := op.Apply(ss.store.GetDB()); err != nil {
-			log.Printf("Failed to apply operation %s: %v", op.ID, err)
+		if err := op.ApplyWithValidation(ss.store.GetDB()); err != nil {
+			logging.Warn("Failed to apply operation %s: %v", op.ID, err)
 			continue
 		}
 		applied++
@@ -223,7 +335,9 @@ func (ss *SyncServer) handlePostOperations(w http.ResponseWriter, r *http.Reques
 
 	response := AppliedResponse{Applied: applied}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		logging.Warn("Failed to encode response: %v", err)
+	}
 }
 
 func (ss *SyncServer) handleGetState(w http.ResponseWriter, r *http.Request) {
@@ -234,14 +348,14 @@ func (ss *SyncServer) handleGetState(w http.ResponseWriter, r *http.Request) {
 
 	lastOpID, err := ss.store.GetLastOperationID()
 	if err != nil {
-		log.Printf("Failed to get last operation ID: %v", err)
+		logging.Warn("Failed to get last operation ID: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
 	deviceID, err := GetDeviceID(ss.store.GetDB())
 	if err != nil {
-		log.Printf("Failed to get device ID: %v", err)
+		logging.Warn("Failed to get device ID: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -255,7 +369,17 @@ func (ss *SyncServer) handleGetState(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		logging.Warn("Failed to encode state response: %v", err)
+	}
+}
+
+func (ss *SyncServer) getClientIP(r *http.Request) string {
+	ip, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return ip
 }
 
 func (ss *SyncServer) handlePair(w http.ResponseWriter, r *http.Request) {
@@ -263,6 +387,15 @@ func (ss *SyncServer) handlePair(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+
+	clientIP := ss.getClientIP(r)
+	if !ss.pairingRateLimiter.allow(clientIP) {
+		logging.Warn(" Rate limit exceeded for pairing from %s", clientIP)
+		http.Error(w, "Too many pairing attempts, try again later", http.StatusTooManyRequests)
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
 
 	var req struct {
 		PairingCode     string `json:"pairing_code"`
@@ -276,21 +409,17 @@ func (ss *SyncServer) handlePair(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	valid, err := ss.pairingMgr.ValidateCode(req.PairingCode)
+	valid, err := ss.pairingMgr.ValidateAndConsumeCode(req.PairingCode)
 	if err != nil || !valid {
-		log.Printf("Invalid pairing code from %s: %v", req.DeviceName, err)
+		logging.Warn(" Invalid pairing code from %s (%s): %v", req.DeviceName, clientIP, err)
 		http.Error(w, "Invalid or expired pairing code", http.StatusUnauthorized)
 		return
-	}
-
-	if err := ss.pairingMgr.MarkUsed(req.PairingCode); err != nil {
-		log.Printf("Failed to mark code used: %v", err)
 	}
 
 	if req.CertFingerprint != "" {
 		certMgr := NewCertificateManager(ss.store.GetDB())
 		if err := certMgr.SavePeerCertificate(req.DeviceID, req.CertFingerprint); err != nil {
-			log.Printf("Failed to save peer certificate: %v", err)
+			logging.Warn("Failed to save peer certificate: %v", err)
 		}
 	}
 
@@ -310,9 +439,12 @@ func (ss *SyncServer) handlePair(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		logging.Warn("Failed to encode pair response: %v", err)
+		return
+	}
 
-	log.Printf("[INFO] Paired with device: %s (%s)", req.DeviceName, req.DeviceID)
+	logging.Info(" Paired with device: %s (%s)", req.DeviceName, req.DeviceID)
 }
 
 func getOrGenerateSecret(db *sql.DB) (string, error) {

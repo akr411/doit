@@ -91,7 +91,7 @@ func (m SelectionList) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if todo.Note != "" {
 					lines := strings.Count(todo.Note, "\n") + 1
 					if lines > 10 {
-						RunNoteViewer(todo.Note)
+						_ = RunNoteViewer(todo.Note)
 					} else {
 						m.expandedNote = m.cursor
 					}

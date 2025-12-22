@@ -61,7 +61,7 @@ func RebuildState(db *sql.DB, operations []*Operation) error {
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	_, err = tx.Exec("DELETE FROM todos")
 	if err != nil {
@@ -85,33 +85,39 @@ func RebuildState(db *sql.DB, operations []*Operation) error {
 }
 
 func applyOperationInTx(tx *sql.Tx, op *Operation) error {
+	var exists bool
+	var lastTimestamp int64
+
+	err := tx.QueryRow("SELECT updated_at FROM todos WHERE id=?", op.TodoID).Scan(&lastTimestamp)
+	if err == sql.ErrNoRows {
+		exists = false
+	} else if err != nil {
+		return fmt.Errorf("failed to check todo: %w", err)
+	} else {
+		exists = true
+	}
+
+	if exists && op.Timestamp < lastTimestamp {
+		return nil
+	}
+
 	switch op.Type {
 	case OpTypeCreate:
-		return applyCreateInTx(tx, op)
+		return applyCreateOrUpdateInTx(tx, op, exists)
 	case OpTypeUpdate:
-		return applyUpdateInTx(tx, op)
+		return applyCreateOrUpdateInTx(tx, op, exists)
 	case OpTypeComplete:
-		return applyCompleteInTx(tx, op)
+		return applyCompleteInTx(tx, op, exists)
 	case OpTypeDelete:
-		return applyDeleteInTx(tx, op)
+		return applyDeleteInTx(tx, op, exists)
 	default:
 		return fmt.Errorf("unknown operation type: %s", op.Type)
 	}
 }
 
-func applyCreateInTx(tx *sql.Tx, op *Operation) error {
+func applyCreateOrUpdateInTx(tx *sql.Tx, op *Operation, exists bool) error {
 	if len(op.Data) == 0 {
-		return fmt.Errorf("CREATE operation requires data")
-	}
-
-	var exists bool
-	err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM todos WHERE id=?)", op.TodoID).Scan(&exists)
-	if err != nil {
-		return fmt.Errorf("failed to check todo existence: %w", err)
-	}
-
-	if exists {
-		return applyUpdateInTx(tx, op)
+		return fmt.Errorf("%s operation requires data", op.Type)
 	}
 
 	var todo map[string]interface{}
@@ -129,83 +135,33 @@ func applyCreateInTx(tx *sql.Tx, op *Operation) error {
 	deadline, _ := todo["deadline"].(float64)
 	createdAt, _ := todo["created_at"].(float64)
 
-	_, err = tx.Exec(`
-		INSERT INTO todos (id, task, note, deadline, completed, created_at, updated_at, deleted)
-		VALUES (?, ?, ?, ?, ?, ?, ?, 0)
-	`, op.TodoID, task, note, int64(deadline), completed, int64(createdAt), op.Timestamp)
-
-	if err != nil {
-		return fmt.Errorf("failed to create todo: %w", err)
+	if !exists {
+		_, err := tx.Exec(`
+			INSERT INTO todos (id, task, note, deadline, completed, created_at, updated_at, deleted)
+			VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+		`, op.TodoID, task, note, int64(deadline), completed, int64(createdAt), op.Timestamp)
+		if err != nil {
+			return fmt.Errorf("failed to create todo: %w", err)
+		}
+	} else {
+		_, err := tx.Exec(`
+			UPDATE todos
+			SET task = ?, note = ?, deadline = ?, completed = ?, updated_at = ?
+			WHERE id = ?
+		`, task, note, int64(deadline), completed, op.Timestamp, op.TodoID)
+		if err != nil {
+			return fmt.Errorf("failed to update todo: %w", err)
+		}
 	}
 
 	return nil
 }
 
-func applyUpdateInTx(tx *sql.Tx, op *Operation) error {
-	if len(op.Data) == 0 {
-		return fmt.Errorf("UPDATE operation requires data")
-	}
-
-	var lastTimestamp int64
-	err := tx.QueryRow("SELECT updated_at FROM todos WHERE id=?", op.TodoID).Scan(&lastTimestamp)
-	if err != nil && err != sql.ErrNoRows {
-		return fmt.Errorf("failed to get last timestamp: %w", err)
-	}
-
-	if op.Timestamp < lastTimestamp {
-		return nil
-	}
-
-	if err == sql.ErrNoRows {
-		return applyCreateInTx(tx, op)
-	}
-
-	var todo map[string]interface{}
-	if err := json.Unmarshal(op.Data, &todo); err != nil {
-		return fmt.Errorf("failed to unmarshal todo data: %w", err)
-	}
-
-	completed := 0
-	if c, ok := todo["completed"].(bool); ok && c {
-		completed = 1
-	}
-
-	task, _ := todo["task"].(string)
-	note, _ := todo["note"].(string)
-	deadline, _ := todo["deadline"].(float64)
-
-	_, err = tx.Exec(`
-		UPDATE todos
-		SET task = ?, note = ?, deadline = ?, completed = ?, updated_at = ?
-		WHERE id = ?
-	`, task, note, int64(deadline), completed, op.Timestamp, op.TodoID)
-
-	if err != nil {
-		return fmt.Errorf("failed to update todo: %w", err)
-	}
-
-	return nil
-}
-
-func applyCompleteInTx(tx *sql.Tx, op *Operation) error {
+func applyCompleteInTx(tx *sql.Tx, op *Operation, exists bool) error {
 	if len(op.Data) == 0 {
 		return fmt.Errorf("COMPLETE operation requires data")
 	}
 
-	var lastTimestamp int64
-	err := tx.QueryRow("SELECT updated_at FROM todos WHERE id=?", op.TodoID).Scan(&lastTimestamp)
-	if err != nil && err != sql.ErrNoRows {
-		return fmt.Errorf("failed to get last timestamp: %w", err)
-	}
-
-	if op.Timestamp < lastTimestamp {
-		return nil
-	}
-
-	if err == sql.ErrNoRows {
-		return applyCreateInTx(tx, op)
-	}
-
 	var todo map[string]interface{}
 	if err := json.Unmarshal(op.Data, &todo); err != nil {
 		return fmt.Errorf("failed to unmarshal todo data: %w", err)
@@ -216,35 +172,39 @@ func applyCompleteInTx(tx *sql.Tx, op *Operation) error {
 		completed = 1
 	}
 
-	_, err = tx.Exec(`
-		UPDATE todos
-		SET completed = ?, updated_at = ?
-		WHERE id = ?
-	`, completed, op.Timestamp, op.TodoID)
+	if !exists {
+		task, _ := todo["task"].(string)
+		note, _ := todo["note"].(string)
+		deadline, _ := todo["deadline"].(float64)
+		createdAt, _ := todo["created_at"].(float64)
 
-	if err != nil {
-		return fmt.Errorf("failed to complete todo: %w", err)
+		_, err := tx.Exec(`
+			INSERT INTO todos (id, task, note, deadline, completed, created_at, updated_at, deleted)
+			VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+		`, op.TodoID, task, note, int64(deadline), completed, int64(createdAt), op.Timestamp)
+		if err != nil {
+			return fmt.Errorf("failed to create todo: %w", err)
+		}
+	} else {
+		_, err := tx.Exec(`
+			UPDATE todos
+			SET completed = ?, updated_at = ?
+			WHERE id = ?
+		`, completed, op.Timestamp, op.TodoID)
+		if err != nil {
+			return fmt.Errorf("failed to complete todo: %w", err)
+		}
 	}
 
 	return nil
 }
 
-func applyDeleteInTx(tx *sql.Tx, op *Operation) error {
-	var lastTimestamp int64
-	err := tx.QueryRow("SELECT updated_at FROM todos WHERE id=?", op.TodoID).Scan(&lastTimestamp)
-	if err != nil && err != sql.ErrNoRows {
-		return fmt.Errorf("failed to get last timestamp: %w", err)
-	}
-
-	if op.Timestamp < lastTimestamp {
+func applyDeleteInTx(tx *sql.Tx, op *Operation, exists bool) error {
+	if !exists {
 		return nil
 	}
 
-	if err == sql.ErrNoRows {
-		return nil
-	}
-
-	_, err = tx.Exec(`
+	_, err := tx.Exec(`
 		UPDATE todos
 		SET deleted = 1, updated_at = ?
 		WHERE id = ?

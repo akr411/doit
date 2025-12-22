@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/akr411/doit/internal/keyring"
 	"github.com/akr411/doit/internal/models"
 	"github.com/google/uuid"
 	_ "modernc.org/sqlite"
@@ -40,16 +41,25 @@ type SyncState struct {
 	OperationsReceived int64
 }
 
-var getDBPath = func() (string, error) {
-	var dataDir string
+// GetDataDir returns the doit data directory path ($XDG_DATA_HOME/doit or ~/.local/share/doit).
+func GetDataDir() (string, error) {
+	var baseDir string
 	if os.Getenv("XDG_DATA_HOME") != "" {
-		dataDir = os.Getenv("XDG_DATA_HOME")
+		baseDir = os.Getenv("XDG_DATA_HOME")
 	} else if home, err := os.UserHomeDir(); err == nil {
-		dataDir = filepath.Join(home, ".local", "share")
+		baseDir = filepath.Join(home, ".local", "share")
 	} else {
 		return "", fmt.Errorf("failed to determine home directory: %w", err)
 	}
-	return filepath.Join(dataDir, "doit", "doit.db"), nil
+	return filepath.Join(baseDir, "doit"), nil
+}
+
+var getDBPath = func() (string, error) {
+	dataDir, err := GetDataDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dataDir, "doit.db"), nil
 }
 
 // New creates a new storage instance with SQLite database at the default path.
@@ -60,7 +70,12 @@ func New() (*Storage, error) {
 	if err != nil {
 		return nil, err
 	}
+	return NewWithPath(dbPath)
+}
 
+// NewWithPath creates a new storage instance with SQLite database at the specified path.
+// Use this for testing with isolated database files.
+func NewWithPath(dbPath string) (*Storage, error) {
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
 		return nil, fmt.Errorf("failed to create data directory: %w", err)
 	}
@@ -70,14 +85,18 @@ func New() (*Storage, error) {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
+	db.SetMaxOpenConns(10)
+	db.SetMaxIdleConns(5)
+	db.SetConnMaxLifetime(0)
+
 	if err := enableWAL(db); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, err
 	}
 
 	s := &Storage{db: db}
 	if err := s.createTables(); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, err
 	}
 
@@ -140,6 +159,8 @@ func (s *Storage) createTables() error {
 	CREATE INDEX IF NOT EXISTS idx_ops_synced ON operations(synced);
 	CREATE INDEX IF NOT EXISTS idx_ops_device ON operations(device_id);
 	CREATE INDEX IF NOT EXISTS idx_ops_todo ON operations(todo_id);
+	CREATE INDEX IF NOT EXISTS idx_ops_synced_timestamp ON operations(synced, timestamp);
+	CREATE INDEX IF NOT EXISTS idx_ops_todo_timestamp ON operations(todo_id, timestamp);
 
 	CREATE TABLE IF NOT EXISTS peers (
 		id TEXT PRIMARY KEY,
@@ -246,7 +267,7 @@ func (s *Storage) SaveTodo(todo *models.Todo) error {
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	var syncEnabled string
 	err = tx.QueryRow("SELECT value FROM config WHERE key = 'sync_enabled'").Scan(&syncEnabled)
@@ -334,7 +355,7 @@ func (s *Storage) GetAllTodos() ([]*models.Todo, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var todos []*models.Todo
 	for rows.Next() {
@@ -362,7 +383,7 @@ func (s *Storage) UpdateTodo(todo *models.Todo) error {
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	timestamp := time.Now().UnixNano()
 	todo.UpdatedAt = timestamp
@@ -420,7 +441,7 @@ func (s *Storage) CompleteTodo(id string, completed bool) error {
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	var todo models.Todo
 	var completedInt int
@@ -489,7 +510,7 @@ func (s *Storage) DeleteTodo(id string) error {
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	timestamp := time.Now().UnixNano()
 
@@ -562,6 +583,48 @@ func (s *Storage) UpdateStreak(streak *models.Streak) error {
 	return err
 }
 
+// RecordCompletion updates streak after completing a todo. Respects streaks_enabled config.
+func (s *Storage) RecordCompletion() error {
+	enabled, _ := s.GetConfig("streaks_enabled")
+	if enabled == "false" {
+		return nil
+	}
+
+	streak, err := s.GetStreak()
+	if err != nil {
+		return err
+	}
+
+	now := time.Now()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).Unix()
+
+	if streak.LastCompletedAt == 0 {
+		streak.CurrentStreak = 1
+		streak.MaxStreak = 1
+	} else {
+		lastDay := time.Unix(streak.LastCompletedAt, 0)
+		lastDayStart := time.Date(lastDay.Year(), lastDay.Month(), lastDay.Day(), 0, 0, 0, 0, lastDay.Location()).Unix()
+		daysDiff := (today - lastDayStart) / 86400
+
+		switch daysDiff {
+		case 0:
+			// Same day, no streak change
+		case 1:
+			streak.CurrentStreak++
+			if streak.CurrentStreak > streak.MaxStreak {
+				streak.MaxStreak = streak.CurrentStreak
+			}
+		default:
+			streak.CurrentStreak = 1
+		}
+	}
+
+	streak.TotalCompleted++
+	streak.LastCompletedAt = now.Unix()
+
+	return s.UpdateStreak(streak)
+}
+
 // GetConfig retrieves a config value by key.
 func (s *Storage) GetConfig(key string) (string, error) {
 	var value string
@@ -584,7 +647,7 @@ func (s *Storage) CleanupOldCompleted() error {
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	limitStr, err := s.GetConfig("completed_limit")
 	if err != nil {
@@ -592,7 +655,7 @@ func (s *Storage) CleanupOldCompleted() error {
 	}
 
 	var limit int
-	fmt.Sscanf(limitStr, "%d", &limit)
+	_, _ = fmt.Sscanf(limitStr, "%d", &limit)
 	if limit <= 0 {
 		limit = 50
 	}
@@ -612,7 +675,7 @@ func (s *Storage) CleanupOldCompleted() error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var idsToDelete []string
 	for rows.Next() {
@@ -622,7 +685,7 @@ func (s *Storage) CleanupOldCompleted() error {
 		}
 		idsToDelete = append(idsToDelete, id)
 	}
-	rows.Close()
+	_ = rows.Close()
 
 	timestamp := time.Now().UnixNano()
 
@@ -687,7 +750,7 @@ func (s *Storage) GetOperations(since string) ([]OperationData, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var operations []OperationData
 	for rows.Next() {
@@ -712,7 +775,7 @@ func (s *Storage) GetOperationsSince(timestamp int64) ([]OperationData, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var operations []OperationData
 	for rows.Next() {
@@ -742,6 +805,31 @@ func (s *Storage) GetLastOperationID() (string, error) {
 	return id, err
 }
 
+// GetAllOperations retrieves all operations from the database.
+// Used for repair rebuild to reconstruct state from operation log.
+func (s *Storage) GetAllOperations() ([]OperationData, error) {
+	rows, err := s.db.Query(`
+		SELECT id, type, todo_id, data, timestamp, device_id, synced
+		FROM operations
+		ORDER BY timestamp ASC, device_id ASC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var operations []OperationData
+	for rows.Next() {
+		var op OperationData
+		if err := rows.Scan(&op.ID, &op.Type, &op.TodoID, &op.Data, &op.Timestamp, &op.DeviceID, &op.Synced); err != nil {
+			return nil, err
+		}
+		operations = append(operations, op)
+	}
+
+	return operations, rows.Err()
+}
+
 // MarkOperationsSynced marks multiple operations as synced (synced=1).
 func (s *Storage) MarkOperationsSynced(ids []string) error {
 	if len(ids) == 0 {
@@ -752,7 +840,7 @@ func (s *Storage) MarkOperationsSynced(ids []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	for _, id := range ids {
 		_, err := tx.Exec("UPDATE operations SET synced = 1 WHERE id = ?", id)
@@ -776,7 +864,7 @@ func (s *Storage) AddOrUpdatePeer(peer *Peer) error {
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	_, err = tx.Exec(`
 		INSERT INTO peers (id, name, address, last_seen, status, created_at)
@@ -805,7 +893,7 @@ func (s *Storage) GetPeers() ([]*Peer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to query peers: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var peers []*Peer
 	for rows.Next() {
@@ -831,7 +919,7 @@ func (s *Storage) GetActivePeers() ([]*Peer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to query active peers: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var peers []*Peer
 	for rows.Next() {
@@ -890,7 +978,7 @@ func (s *Storage) UpdateSyncState(peerID string, state *SyncState) error {
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	_, err = tx.Exec(`
 		INSERT INTO sync_state (peer_id, last_operation_id, last_sync_time, operations_sent, operations_received)
@@ -910,7 +998,17 @@ func (s *Storage) UpdateSyncState(peerID string, state *SyncState) error {
 }
 
 // SavePeerSecret saves the shared secret for a paired peer.
+// Tries OS keyring first, falls back to database if unavailable.
 func (s *Storage) SavePeerSecret(peerID, secret string) error {
+	if keyring.IsAvailable() {
+		if err := keyring.SetPeerSecret(peerID, secret); err == nil {
+			_, _ = s.db.Exec(`
+				INSERT OR REPLACE INTO peer_secrets (peer_id, secret)
+				VALUES (?, ?)
+			`, peerID, "[keyring]")
+			return nil
+		}
+	}
 	_, err := s.db.Exec(`
 		INSERT OR REPLACE INTO peer_secrets (peer_id, secret)
 		VALUES (?, ?)
@@ -919,15 +1017,154 @@ func (s *Storage) SavePeerSecret(peerID, secret string) error {
 }
 
 // GetPeerSecret retrieves the shared secret for a peer.
+// Tries OS keyring first, falls back to database if unavailable.
 func (s *Storage) GetPeerSecret(peerID string) (string, error) {
 	var secret string
 	err := s.db.QueryRow(`
 		SELECT secret FROM peer_secrets WHERE peer_id = ?
 	`, peerID).Scan(&secret)
-	return secret, err
+	if err != nil {
+		return "", err
+	}
+	if secret == "[keyring]" && keyring.IsAvailable() {
+		return keyring.GetPeerSecret(peerID)
+	}
+	return secret, nil
 }
 
 // Close closes the database connection.
 func (s *Storage) Close() error {
 	return s.db.Close()
+}
+
+// IntegrityResult contains the results of a database integrity check.
+type IntegrityResult struct {
+	SQLiteOK          bool
+	ForeignKeysOK     bool
+	OrphanedOps       int
+	InvalidJSON       int
+	DuplicateTodos    int
+	MissingTimestamps int
+	Errors            []string
+}
+
+// CheckIntegrity performs comprehensive database integrity checks.
+// Returns IntegrityResult with details of any issues found.
+func (s *Storage) CheckIntegrity() (*IntegrityResult, error) {
+	result := &IntegrityResult{
+		SQLiteOK:      true,
+		ForeignKeysOK: true,
+	}
+
+	var integrityCheck string
+	err := s.db.QueryRow("PRAGMA integrity_check").Scan(&integrityCheck)
+	if err != nil {
+		result.SQLiteOK = false
+		result.Errors = append(result.Errors, fmt.Sprintf("integrity_check failed: %v", err))
+	} else if integrityCheck != "ok" {
+		result.SQLiteOK = false
+		result.Errors = append(result.Errors, fmt.Sprintf("integrity_check: %s", integrityCheck))
+	}
+
+	rows, err := s.db.Query("PRAGMA foreign_key_check")
+	if err != nil {
+		result.ForeignKeysOK = false
+		result.Errors = append(result.Errors, fmt.Sprintf("foreign_key_check failed: %v", err))
+	} else {
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			result.ForeignKeysOK = false
+			var table, rowid, parent, fkid string
+			_ = rows.Scan(&table, &rowid, &parent, &fkid)
+			result.Errors = append(result.Errors, fmt.Sprintf("FK violation: %s.%s -> %s", table, rowid, parent))
+		}
+	}
+
+	var orphanedCount int
+	err = s.db.QueryRow(`
+		SELECT COUNT(*) FROM operations o
+		WHERE o.type != 'DELETE'
+		AND NOT EXISTS (SELECT 1 FROM todos t WHERE t.id = o.todo_id)
+	`).Scan(&orphanedCount)
+	if err == nil && orphanedCount > 0 {
+		result.OrphanedOps = orphanedCount
+		result.Errors = append(result.Errors, fmt.Sprintf("%d orphaned operations", orphanedCount))
+	}
+
+	opRows, err := s.db.Query("SELECT id, data FROM operations WHERE type != 'DELETE'")
+	if err == nil {
+		defer func() { _ = opRows.Close() }()
+		for opRows.Next() {
+			var id, data string
+			if err := opRows.Scan(&id, &data); err != nil {
+				continue
+			}
+			var js map[string]interface{}
+			if err := json.Unmarshal([]byte(data), &js); err != nil {
+				result.InvalidJSON++
+			}
+		}
+	}
+	if result.InvalidJSON > 0 {
+		result.Errors = append(result.Errors, fmt.Sprintf("%d operations with invalid JSON", result.InvalidJSON))
+	}
+
+	var dupCount int
+	err = s.db.QueryRow(`
+		SELECT COUNT(*) FROM (
+			SELECT id, COUNT(*) as cnt FROM todos GROUP BY id HAVING cnt > 1
+		)
+	`).Scan(&dupCount)
+	if err == nil && dupCount > 0 {
+		result.DuplicateTodos = dupCount
+		result.Errors = append(result.Errors, fmt.Sprintf("%d duplicate todo IDs", dupCount))
+	}
+
+	var missingTs int
+	err = s.db.QueryRow(`
+		SELECT COUNT(*) FROM todos WHERE created_at IS NULL OR updated_at IS NULL
+	`).Scan(&missingTs)
+	if err == nil && missingTs > 0 {
+		result.MissingTimestamps = missingTs
+		result.Errors = append(result.Errors, fmt.Sprintf("%d todos with missing timestamps", missingTs))
+	}
+
+	return result, nil
+}
+
+// RepairIntegrity attempts to repair common integrity issues.
+// Returns number of issues fixed and any errors encountered.
+func (s *Storage) RepairIntegrity() (int, error) {
+	fixed := 0
+
+	result, err := s.CheckIntegrity()
+	if err != nil {
+		return 0, err
+	}
+
+	if result.OrphanedOps > 0 {
+		res, err := s.db.Exec(`
+			DELETE FROM operations
+			WHERE type != 'DELETE'
+			AND NOT EXISTS (SELECT 1 FROM todos WHERE todos.id = operations.todo_id)
+		`)
+		if err == nil {
+			n, _ := res.RowsAffected()
+			fixed += int(n)
+		}
+	}
+
+	if result.MissingTimestamps > 0 {
+		now := time.Now().UnixNano()
+		res, err := s.db.Exec(`
+			UPDATE todos SET created_at = ?, updated_at = ?
+			WHERE created_at IS NULL OR updated_at IS NULL
+		`, now, now)
+		if err == nil {
+			n, _ := res.RowsAffected()
+			fixed += int(n)
+		}
+	}
+
+	return fixed, nil
 }

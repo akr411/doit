@@ -40,12 +40,19 @@ var (
 	deadlineAllowedPattern = regexp.MustCompile(`^[a-zA-Z0-9\s\-:/.]+$`)
 )
 
+func isDangerousChar(r rune) bool {
+	for _, d := range dangerousChars {
+		if r == d {
+			return true
+		}
+	}
+	return false
+}
+
 func containsDangerousChar(s string) (bool, rune) {
 	for _, r := range s {
-		for _, d := range dangerousChars {
-			if r == d {
-				return true, r
-			}
+		if isDangerousChar(r) {
+			return true, r
 		}
 	}
 	return false, 0
@@ -93,10 +100,8 @@ func ValidateNote(note string) error {
 		if r == '\n' || r == '\r' || r == '\t' {
 			continue
 		}
-		for _, d := range dangerousChars {
-			if r == d {
-				return fmt.Errorf("note contains %s", formatCharName(r))
-			}
+		if isDangerousChar(r) {
+			return fmt.Errorf("note contains %s", formatCharName(r))
 		}
 	}
 	return nil

@@ -3,7 +3,7 @@ package logging
 import (
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -19,50 +19,61 @@ const (
 )
 
 var (
-	logger     *Logger
-	once       sync.Once
-	currentLog Level = INFO
+	mu           sync.Mutex
+	slogger      *slog.Logger
+	logFile      *os.File
+	currentLevel Level = INFO
 )
 
-type Logger struct {
-	debugLog *log.Logger
-	infoLog  *log.Logger
-	warnLog  *log.Logger
-	errorLog *log.Logger
-	file     *os.File
-}
-
 func Init(dataDir string, level Level) error {
-	var err error
-	once.Do(func() {
-		currentLog = level
-		logPath := filepath.Join(dataDir, "sync.log")
+	mu.Lock()
+	defer mu.Unlock()
 
-		if fileErr := rotateLogIfNeeded(logPath); fileErr != nil {
-			err = fileErr
-			return
-		}
+	if logFile != nil {
+		_ = logFile.Close()
+		logFile = nil
+		slogger = nil
+	}
 
-		file, fileErr := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-		if fileErr != nil {
-			err = fileErr
-			return
-		}
+	currentLevel = level
+	logPath := filepath.Join(dataDir, "sync.log")
 
-		writer := io.MultiWriter(file)
-		if level == DEBUG {
-			writer = io.MultiWriter(os.Stdout, file)
-		}
+	if err := rotateLogIfNeeded(logPath); err != nil {
+		return err
+	}
 
-		logger = &Logger{
-			debugLog: log.New(writer, "[DEBUG] ", log.LstdFlags),
-			infoLog:  log.New(writer, "[INFO] ", log.LstdFlags),
-			warnLog:  log.New(writer, "[WARN] ", log.LstdFlags),
-			errorLog: log.New(writer, "[ERROR] ", log.LstdFlags),
-			file:     file,
-		}
-	})
-	return err
+	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return err
+	}
+	logFile = file
+
+	var writer io.Writer = file
+	if level == DEBUG {
+		writer = io.MultiWriter(os.Stdout, file)
+	}
+
+	var slogLevel slog.Level
+	switch level {
+	case DEBUG:
+		slogLevel = slog.LevelDebug
+	case INFO:
+		slogLevel = slog.LevelInfo
+	case WARN:
+		slogLevel = slog.LevelWarn
+	case ERROR:
+		slogLevel = slog.LevelError
+	default:
+		slogLevel = slog.LevelInfo
+	}
+
+	opts := &slog.HandlerOptions{
+		Level: slogLevel,
+	}
+	handler := slog.NewTextHandler(writer, opts)
+	slogger = slog.New(handler)
+
+	return nil
 }
 
 func rotateLogIfNeeded(logPath string) error {
@@ -78,7 +89,7 @@ func rotateLogIfNeeded(logPath string) error {
 
 	if info.Size() > maxSize {
 		backupPath := logPath + ".old"
-		os.Remove(backupPath)
+		_ = os.Remove(backupPath)
 		if err := os.Rename(logPath, backupPath); err != nil {
 			return err
 		}
@@ -88,32 +99,53 @@ func rotateLogIfNeeded(logPath string) error {
 }
 
 func Close() {
-	if logger != nil && logger.file != nil {
-		logger.file.Close()
+	mu.Lock()
+	defer mu.Unlock()
+
+	if logFile != nil {
+		_ = logFile.Close()
+		logFile = nil
+		slogger = nil
 	}
 }
 
 func Debug(format string, v ...interface{}) {
-	if logger != nil && currentLog <= DEBUG {
-		logger.debugLog.Printf(format, v...)
+	mu.Lock()
+	l := slogger
+	level := currentLevel
+	mu.Unlock()
+	if l != nil && level <= DEBUG {
+		l.Debug(fmt.Sprintf(format, v...))
 	}
 }
 
 func Info(format string, v ...interface{}) {
-	if logger != nil && currentLog <= INFO {
-		logger.infoLog.Printf(format, v...)
+	mu.Lock()
+	l := slogger
+	level := currentLevel
+	mu.Unlock()
+	if l != nil && level <= INFO {
+		l.Info(fmt.Sprintf(format, v...))
 	}
 }
 
 func Warn(format string, v ...interface{}) {
-	if logger != nil && currentLog <= WARN {
-		logger.warnLog.Printf(format, v...)
+	mu.Lock()
+	l := slogger
+	level := currentLevel
+	mu.Unlock()
+	if l != nil && level <= WARN {
+		l.Warn(fmt.Sprintf(format, v...))
 	}
 }
 
 func Error(format string, v ...interface{}) {
-	if logger != nil && currentLog <= ERROR {
-		logger.errorLog.Printf(format, v...)
+	mu.Lock()
+	l := slogger
+	level := currentLevel
+	mu.Unlock()
+	if l != nil && level <= ERROR {
+		l.Error(fmt.Sprintf(format, v...))
 	}
 }
 
@@ -126,7 +158,10 @@ func Errorf(format string, v ...interface{}) {
 }
 
 func Printf(format string, v ...interface{}) {
-	if logger != nil {
-		fmt.Fprintf(logger.file, format+"\n", v...)
+	mu.Lock()
+	f := logFile
+	mu.Unlock()
+	if f != nil {
+		_, _ = f.WriteString(fmt.Sprintf(format, v...) + "\n")
 	}
 }

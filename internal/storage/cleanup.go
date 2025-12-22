@@ -135,7 +135,7 @@ func (s *Storage) ShouldRunCleanup() bool {
 	}
 
 	var lastCleanup int64
-	fmt.Sscanf(lastCleanupStr, "%d", &lastCleanup)
+	_, _ = fmt.Sscanf(lastCleanupStr, "%d", &lastCleanup)
 
 	intervalHours := s.getCleanupIntervalHours()
 	nextCleanup := lastCleanup + int64(intervalHours*3600)
@@ -147,10 +147,10 @@ func (s *Storage) ShouldRunCleanup() bool {
 func (s *Storage) GetCleanupStats() (SyncStats, error) {
 	var stats SyncStats
 
-	s.db.QueryRow("SELECT COUNT(*) FROM operations").Scan(&stats.TotalOperations)
-	s.db.QueryRow("SELECT COUNT(*) FROM operations WHERE synced=1").Scan(&stats.SyncedOperations)
-	s.db.QueryRow("SELECT COUNT(*) FROM operations WHERE synced=0").Scan(&stats.UnsyncedOperations)
-	s.db.QueryRow("SELECT COUNT(*) FROM todos WHERE deleted=1").Scan(&stats.Tombstones)
+	_ = s.db.QueryRow("SELECT COUNT(*) FROM operations").Scan(&stats.TotalOperations)
+	_ = s.db.QueryRow("SELECT COUNT(*) FROM operations WHERE synced=1").Scan(&stats.SyncedOperations)
+	_ = s.db.QueryRow("SELECT COUNT(*) FROM operations WHERE synced=0").Scan(&stats.UnsyncedOperations)
+	_ = s.db.QueryRow("SELECT COUNT(*) FROM todos WHERE deleted=1").Scan(&stats.Tombstones)
 
 	retentionDays := s.getOperationRetentionDays()
 	cutoffNano := time.Now().UnixNano() - int64(retentionDays*24*60*60)*1e9
@@ -158,7 +158,7 @@ func (s *Storage) GetCleanupStats() (SyncStats, error) {
 	tombRetention := s.getTombstoneRetentionDays()
 	tombCutoff := time.Now().UnixNano() - int64(tombRetention*24*60*60)*1e9
 	completedLimit := s.getCompletedLimit()
-	s.db.QueryRow(`
+	_ = s.db.QueryRow(`
 		WITH keep_ids AS (
 			SELECT id FROM todos
 			WHERE deleted = 1 OR completed = 1
@@ -171,7 +171,7 @@ func (s *Storage) GetCleanupStats() (SyncStats, error) {
 		AND id NOT IN (SELECT id FROM keep_ids)
 	`, completedLimit, tombCutoff).Scan(&stats.CleanableTombstones)
 
-	s.db.QueryRow(`
+	_ = s.db.QueryRow(`
 		SELECT COUNT(*) FROM operations
 		WHERE synced=1
 		AND timestamp < ?
@@ -185,14 +185,14 @@ func (s *Storage) GetCleanupStats() (SyncStats, error) {
 	`, cutoffNano, s.getMaxOperationsPerTodo()).Scan(&stats.CleanableOperations)
 
 	var pageCount, pageSize int64
-	s.db.QueryRow("PRAGMA page_count").Scan(&pageCount)
-	s.db.QueryRow("PRAGMA page_size").Scan(&pageSize)
+	_ = s.db.QueryRow("PRAGMA page_count").Scan(&pageCount)
+	_ = s.db.QueryRow("PRAGMA page_size").Scan(&pageSize)
 	stats.DBSizeKB = (pageCount * pageSize) / 1024
 
 	var lastCleanupStr string
 	err := s.db.QueryRow("SELECT value FROM config WHERE key='last_cleanup_time'").Scan(&lastCleanupStr)
 	if err == nil {
-		fmt.Sscanf(lastCleanupStr, "%d", &stats.LastCleanupTime)
+		_, _ = fmt.Sscanf(lastCleanupStr, "%d", &stats.LastCleanupTime)
 		stats.HoursSinceCleanup = int((time.Now().Unix() - stats.LastCleanupTime) / 3600)
 	} else {
 		stats.LastCleanupTime = 0
@@ -210,7 +210,7 @@ func (s *Storage) getTombstoneRetentionDays() int {
 	}
 
 	var d int
-	fmt.Sscanf(days, "%d", &d)
+	_, _ = fmt.Sscanf(days, "%d", &d)
 	if d <= 0 {
 		return 30
 	}
@@ -225,7 +225,7 @@ func (s *Storage) getOperationRetentionDays() int {
 	}
 
 	var d int
-	fmt.Sscanf(days, "%d", &d)
+	_, _ = fmt.Sscanf(days, "%d", &d)
 	if d <= 0 {
 		return 30
 	}
@@ -240,7 +240,7 @@ func (s *Storage) getMaxOperationsPerTodo() int {
 	}
 
 	var m int
-	fmt.Sscanf(max, "%d", &m)
+	_, _ = fmt.Sscanf(max, "%d", &m)
 	if m <= 0 {
 		return 10
 	}
@@ -254,7 +254,7 @@ func (s *Storage) getCompletedLimit() int {
 	}
 
 	var limit int
-	fmt.Sscanf(limitStr, "%d", &limit)
+	_, _ = fmt.Sscanf(limitStr, "%d", &limit)
 	if limit <= 0 {
 		return 50
 	}
@@ -269,7 +269,7 @@ func (s *Storage) getCleanupIntervalHours() int {
 	}
 
 	var h int
-	fmt.Sscanf(hours, "%d", &h)
+	_, _ = fmt.Sscanf(hours, "%d", &h)
 	if h <= 0 {
 		return 24
 	}

@@ -7,27 +7,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"time"
 
+	"github.com/akr411/doit/internal/logging"
 	"github.com/akr411/doit/internal/retry"
 	"github.com/akr411/doit/internal/storage"
 )
 
 // ErrUnauthorized is returned when authentication fails during sync operations.
 var ErrUnauthorized = errors.New("unauthorized")
-
-var syncHTTPClient = &http.Client{
-	Timeout: 30 * time.Second,
-	Transport: &http.Transport{
-		MaxIdleConns:          100,
-		MaxConnsPerHost:       20,
-		MaxIdleConnsPerHost:   20,
-		IdleConnTimeout:       90 * time.Second,
-		ResponseHeaderTimeout: 10 * time.Second,
-	},
-}
 
 // SyncClient handles HTTPS communication with peer devices for pull/push operations.
 // It uses TLS 1.3 with certificate verification for secure peer communication.
@@ -90,7 +79,7 @@ func (sc *SyncClient) GetPeerState(peer *Peer) (*PeerState, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to get peer state: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("peer returned status %d", resp.StatusCode)
@@ -128,7 +117,7 @@ func (sc *SyncClient) PullOperations(peer *Peer, secret string, since string) ([
 		if err != nil {
 			return err
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 
 		if resp.StatusCode == http.StatusUnauthorized {
 			return fmt.Errorf("pairing rejected: %w", ErrUnauthorized)
@@ -187,7 +176,7 @@ func (sc *SyncClient) PushOperations(peer *Peer, secret string, ops []Operation)
 		if err != nil {
 			return err
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 
 		if resp.StatusCode == http.StatusUnauthorized {
 			return fmt.Errorf("pairing rejected: %w", ErrUnauthorized)
@@ -231,7 +220,7 @@ func (sc *SyncClient) InitialSync(peer *Peer) error {
 
 	for _, op := range newOps {
 		if err := op.Apply(sc.store.GetDB()); err != nil {
-			log.Printf("Failed to apply operation %s: %v", op.ID, err)
+			logging.Warn("Failed to apply operation %s: %v", op.ID, err)
 		}
 	}
 
@@ -241,29 +230,18 @@ func (sc *SyncClient) InitialSync(peer *Peer) error {
 		return fmt.Errorf("failed to get operations to push: %w", err)
 	}
 
-	operations := make([]Operation, 0, len(ops))
-	for _, opData := range ops {
-		op := Operation{
-			ID:        opData.ID,
-			Type:      opData.Type,
-			TodoID:    opData.TodoID,
-			Data:      []byte(opData.Data),
-			Timestamp: opData.Timestamp,
-			DeviceID:  opData.DeviceID,
-		}
-		operations = append(operations, op)
-	}
+	operations := OperationsFromData(ops)
 
 	if len(operations) > 0 {
 		if err := sc.PushOperations(peer, secret, operations); err != nil {
-			log.Printf("Failed to push operations to %s: %v", peer.Name, err)
+			logging.Warn("Failed to push operations to %s: %v", peer.Name, err)
 		} else {
 			opIDs := make([]string, len(operations))
 			for i, op := range operations {
 				opIDs[i] = op.ID
 			}
 			if err := sc.store.MarkOperationsSynced(opIDs); err != nil {
-				log.Printf("Failed to mark operations synced: %v", err)
+				logging.Warn("Failed to mark operations synced: %v", err)
 			}
 		}
 	}

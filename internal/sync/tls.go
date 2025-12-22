@@ -13,6 +13,8 @@ import (
 	"fmt"
 	"math/big"
 	"time"
+
+	"github.com/akr411/doit/internal/keyring"
 )
 
 // CertificateManager handles TLS certificate generation, storage, and verification.
@@ -81,12 +83,19 @@ func (cm *CertificateManager) GenerateSelfSignedCert(deviceID string) error {
 	fingerprint := sha256.Sum256(certDER)
 	fingerprintHex := hex.EncodeToString(fingerprint[:])
 
+	keyStorage := string(keyPEM)
+	if keyring.IsAvailable() {
+		if err := keyring.SetTLSKey(deviceID, string(keyPEM)); err == nil {
+			keyStorage = "[keyring]"
+		}
+	}
+
 	_, err = cm.db.Exec(`
 		INSERT OR REPLACE INTO config (key, value) VALUES
 		('tls_cert', ?),
 		('tls_key', ?),
 		('tls_fingerprint', ?)
-	`, string(certPEM), string(keyPEM), fingerprintHex)
+	`, string(certPEM), keyStorage, fingerprintHex)
 
 	return err
 }
@@ -106,6 +115,16 @@ func (cm *CertificateManager) GetTLSConfig(isServer bool) (*tls.Config, error) {
 
 	if err != nil {
 		return nil, fmt.Errorf("TLS cert not found. Run 'doit sync init' to generate")
+	}
+
+	if keyPEM == "[keyring]" && keyring.IsAvailable() {
+		var deviceID string
+		_ = cm.db.QueryRow("SELECT value FROM config WHERE key='device_id'").Scan(&deviceID)
+		if deviceID != "" {
+			if key, err := keyring.GetTLSKey(deviceID); err == nil {
+				keyPEM = key
+			}
+		}
 	}
 
 	cert, err := tls.X509KeyPair([]byte(certPEM), []byte(keyPEM))
@@ -144,6 +163,14 @@ func (cm *CertificateManager) verifyPeerCert(rawCerts [][]byte, verifiedChains [
 	cert, err := x509.ParseCertificate(rawCerts[0])
 	if err != nil {
 		return err
+	}
+
+	now := time.Now()
+	if now.Before(cert.NotBefore) {
+		return fmt.Errorf("certificate not yet valid (starts %s)", cert.NotBefore.Format(time.RFC3339))
+	}
+	if now.After(cert.NotAfter) {
+		return fmt.Errorf("certificate expired (expired %s)", cert.NotAfter.Format(time.RFC3339))
 	}
 
 	var storedFingerprint string
@@ -185,4 +212,88 @@ func (cm *CertificateManager) GetFingerprint() (string, error) {
 		SELECT value FROM config WHERE key='tls_fingerprint'
 	`).Scan(&fingerprint)
 	return fingerprint, err
+}
+
+// ComputeCertFingerprint computes the SHA256 fingerprint of a certificate.
+// Returns the 64-character hex-encoded fingerprint string.
+func ComputeCertFingerprint(cert *x509.Certificate) string {
+	fingerprint := sha256.Sum256(cert.Raw)
+	return hex.EncodeToString(fingerprint[:])
+}
+
+// CheckCertValidity checks if local certificate is valid and not expiring soon.
+// Returns nil if valid, error describing the issue otherwise.
+// Warns if expiring within 30 days.
+func (cm *CertificateManager) CheckCertValidity() error {
+	var certPEM string
+	err := cm.db.QueryRow(`SELECT value FROM config WHERE key='tls_cert'`).Scan(&certPEM)
+	if err != nil {
+		return fmt.Errorf("no certificate found")
+	}
+
+	block, _ := pem.Decode([]byte(certPEM))
+	if block == nil {
+		return fmt.Errorf("failed to parse certificate PEM")
+	}
+
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return fmt.Errorf("failed to parse certificate: %w", err)
+	}
+
+	now := time.Now()
+	if now.After(cert.NotAfter) {
+		return fmt.Errorf("certificate expired on %s", cert.NotAfter.Format("2006-01-02"))
+	}
+
+	daysUntilExpiry := int(cert.NotAfter.Sub(now).Hours() / 24)
+	if daysUntilExpiry < 30 {
+		return fmt.Errorf("certificate expires in %d days (on %s)", daysUntilExpiry, cert.NotAfter.Format("2006-01-02"))
+	}
+
+	return nil
+}
+
+// RegenerateCertIfExpired checks cert validity and regenerates if expired.
+// Returns true if regenerated, false if still valid.
+func (cm *CertificateManager) RegenerateCertIfExpired(deviceID string) (bool, error) {
+	var certPEM string
+	err := cm.db.QueryRow(`SELECT value FROM config WHERE key='tls_cert'`).Scan(&certPEM)
+	if err == sql.ErrNoRows {
+		if err := cm.GenerateSelfSignedCert(deviceID); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+
+	block, _ := pem.Decode([]byte(certPEM))
+	if block == nil {
+		_, _ = cm.db.Exec(`DELETE FROM config WHERE key IN ('tls_cert', 'tls_key', 'tls_fingerprint')`)
+		if err := cm.GenerateSelfSignedCert(deviceID); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		_, _ = cm.db.Exec(`DELETE FROM config WHERE key IN ('tls_cert', 'tls_key', 'tls_fingerprint')`)
+		if err := cm.GenerateSelfSignedCert(deviceID); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+
+	if time.Now().After(cert.NotAfter) {
+		_, _ = cm.db.Exec(`DELETE FROM config WHERE key IN ('tls_cert', 'tls_key', 'tls_fingerprint')`)
+		if err := cm.GenerateSelfSignedCert(deviceID); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+
+	return false, nil
 }

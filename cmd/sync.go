@@ -13,8 +13,10 @@ import (
 	"time"
 
 	"github.com/akr411/doit/internal/logging"
+	"github.com/akr411/doit/internal/storage"
 	"github.com/akr411/doit/internal/sync"
 	"github.com/akr411/doit/internal/ui"
+	"github.com/akr411/doit/internal/utils"
 	"github.com/spf13/cobra"
 )
 
@@ -47,9 +49,7 @@ var (
 )
 
 func runCleanup(cmd *cobra.Command, args []string) error {
-	var syncEnabled string
-	err := store.GetDB().QueryRow("SELECT value FROM config WHERE key='sync_enabled'").Scan(&syncEnabled)
-	if err != nil || syncEnabled != "true" {
+	if !sync.IsSyncEnabled(store.GetDB()) {
 		return fmt.Errorf("sync is not enabled. Enable with: doit sync init")
 	}
 
@@ -116,9 +116,7 @@ var statusCmd = &cobra.Command{
 	Short: "Show sync and cleanup status",
 	Long:  "Display sync status, database statistics, and cleanup information",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		var syncEnabled string
-		err := store.GetDB().QueryRow("SELECT value FROM config WHERE key='sync_enabled'").Scan(&syncEnabled)
-		if err != nil || syncEnabled != "true" {
+		if !sync.IsSyncEnabled(store.GetDB()) {
 			fmt.Println("Sync: disabled")
 			fmt.Println()
 			fmt.Println("Enable sync with: doit sync init")
@@ -166,15 +164,12 @@ var statusCmd = &cobra.Command{
 }
 
 func runSyncInit(cmd *cobra.Command, args []string) error {
-	var syncEnabled string
-	err := store.GetDB().QueryRow("SELECT value FROM config WHERE key='sync_enabled'").Scan(&syncEnabled)
-	if err == nil && syncEnabled == "true" {
+	if sync.IsSyncEnabled(store.GetDB()) {
 		ui.PrintWarning("Sync already enabled")
 		return nil
 	}
 
-	_, err = store.GetDB().Exec("INSERT OR REPLACE INTO config (key, value) VALUES ('sync_enabled', 'true')")
-	if err != nil {
+	if err := sync.SetSyncEnabled(store.GetDB(), true); err != nil {
 		return fmt.Errorf("failed to enable sync: %w", err)
 	}
 
@@ -182,7 +177,7 @@ func runSyncInit(cmd *cobra.Command, args []string) error {
 	port := sync.GetSyncPort(store.GetDB())
 
 	var secret string
-	err = store.GetDB().QueryRow("SELECT value FROM config WHERE key='shared_secret'").Scan(&secret)
+	err := store.GetDB().QueryRow("SELECT value FROM config WHERE key='shared_secret'").Scan(&secret)
 	if err != nil {
 		return fmt.Errorf("failed to get shared secret: %w", err)
 	}
@@ -224,9 +219,7 @@ func runSyncDisable(cmd *cobra.Command, args []string) error {
 }
 
 func runSyncDevices(cmd *cobra.Command, args []string) error {
-	var syncEnabled string
-	err := store.GetDB().QueryRow("SELECT value FROM config WHERE key='sync_enabled'").Scan(&syncEnabled)
-	if err != nil || syncEnabled != "true" {
+	if !sync.IsSyncEnabled(store.GetDB()) {
 		return fmt.Errorf("sync not enabled. Run: doit sync init")
 	}
 
@@ -246,17 +239,7 @@ func runSyncDevices(cmd *cobra.Command, args []string) error {
 	for _, peer := range peers {
 		lastSeen := time.Unix(0, peer.LastSeen)
 		timeSince := time.Since(lastSeen)
-		timeStr := ""
-
-		if timeSince < time.Minute {
-			timeStr = fmt.Sprintf("(%ds ago)", int(timeSince.Seconds()))
-		} else if timeSince < time.Hour {
-			timeStr = fmt.Sprintf("(%dm ago)", int(timeSince.Minutes()))
-		} else if timeSince < 24*time.Hour {
-			timeStr = fmt.Sprintf("(%dh ago)", int(timeSince.Hours()))
-		} else {
-			timeStr = fmt.Sprintf("(%dd ago)", int(timeSince.Hours()/24))
-		}
+		timeStr := fmt.Sprintf("(%s)", utils.FormatTimeSince(timeSince))
 
 		fmt.Printf("%-36s %-20s %-25s %-15s %s\n",
 			peer.ID[:8]+"...", peer.Name, peer.Address, peer.Status, timeStr)
@@ -264,15 +247,7 @@ func runSyncDevices(cmd *cobra.Command, args []string) error {
 		syncState, err := store.GetSyncState(peer.ID)
 		if err == nil && syncState.LastSyncTime > 0 {
 			lastSync := time.Unix(0, syncState.LastSyncTime)
-			syncTime := time.Since(lastSync)
-			syncTimeStr := ""
-			if syncTime < time.Minute {
-				syncTimeStr = fmt.Sprintf("%ds ago", int(syncTime.Seconds()))
-			} else if syncTime < time.Hour {
-				syncTimeStr = fmt.Sprintf("%dm ago", int(syncTime.Minutes()))
-			} else {
-				syncTimeStr = fmt.Sprintf("%dh ago", int(syncTime.Hours()))
-			}
+			syncTimeStr := utils.FormatTimeSince(time.Since(lastSync))
 
 			fmt.Printf("  Last sync: %s | Sent: %d ops | Received: %d ops\n",
 				syncTimeStr, syncState.OperationsSent, syncState.OperationsReceived)
@@ -283,13 +258,11 @@ func runSyncDevices(cmd *cobra.Command, args []string) error {
 }
 
 func runSyncDaemon(cmd *cobra.Command, args []string) error {
-	var syncEnabled string
-	err := store.GetDB().QueryRow("SELECT value FROM config WHERE key='sync_enabled'").Scan(&syncEnabled)
-	if err != nil || syncEnabled != "true" {
+	if !sync.IsSyncEnabled(store.GetDB()) {
 		return fmt.Errorf("sync not enabled. Run: doit sync init")
 	}
 
-	dataDir, err := getDataDir()
+	dataDir, err := storage.GetDataDir()
 	if err != nil {
 		return fmt.Errorf("failed to get data directory: %w", err)
 	}
@@ -300,10 +273,10 @@ func runSyncDaemon(cmd *cobra.Command, args []string) error {
 	defer logging.Close()
 
 	pidFile := filepath.Join(dataDir, "doit-sync.pid")
-	if err := writePIDFile(pidFile); err != nil {
+	if err := os.WriteFile(pidFile, []byte(fmt.Sprintf("%d", os.Getpid())), 0644); err != nil {
 		return fmt.Errorf("failed to write PID file: %w", err)
 	}
-	defer os.Remove(pidFile)
+	defer func() { _ = os.Remove(pidFile) }()
 
 	engine, err := sync.NewSyncEngine(store)
 	if err != nil {
@@ -352,24 +325,48 @@ func runSyncShow(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to get fingerprint: %w", err)
 	}
 
+	shortFingerprint := formatFingerprint(fingerprint[:32])
+
 	fmt.Println()
-	fmt.Printf("═══════════════════════════════════\n")
-	fmt.Printf("  Pairing Code: %s\n", deviceName)
-	fmt.Printf("═══════════════════════════════════\n")
+	fmt.Printf("═══════════════════════════════════════════════════\n")
+	fmt.Printf("  Pairing: %s\n", deviceName)
+	fmt.Printf("═══════════════════════════════════════════════════\n")
 	fmt.Println()
 	fmt.Printf("  Code: %s\n", code.Code)
 	fmt.Println()
-	expiresIn := time.Unix(0, code.ExpiresAt).Sub(time.Now())
+	expiresIn := time.Until(time.Unix(0, code.ExpiresAt))
 	fmt.Printf("  Expires: %dm %ds\n", int(expiresIn.Minutes()), int(expiresIn.Seconds())%60)
 	fmt.Println()
-	fmt.Printf("  Fingerprint: %s...\n", fingerprint[:16])
+	ui.PrintWarning("  SECURITY: Verify this fingerprint on pairing device:")
+	fmt.Printf("  Fingerprint: %s\n", shortFingerprint)
 	fmt.Println()
 	fmt.Printf("On other device run:\n")
 	fmt.Printf("  $ doit sync pair %s\n", code.Code)
 	fmt.Println()
-	fmt.Printf("═══════════════════════════════════\n")
+	fmt.Printf("═══════════════════════════════════════════════════\n")
 
 	return nil
+}
+
+func formatFingerprint(fp string) string {
+	var parts []string
+	for i := 0; i < len(fp); i += 4 {
+		end := i + 4
+		if end > len(fp) {
+			end = len(fp)
+		}
+		parts = append(parts, fp[i:end])
+	}
+	result := ""
+	for i, p := range parts {
+		if i > 0 && i%4 == 0 {
+			result += "\n               "
+		} else if i > 0 {
+			result += " "
+		}
+		result += p
+	}
+	return result
 }
 
 func runSyncPair(cmd *cobra.Command, args []string) error {
@@ -397,6 +394,26 @@ func runSyncPair(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to get fingerprint: %w", err)
 	}
 
+	var paired bool
+	for _, peer := range peers {
+		if pairErr := pairWithPeer(peer, code, deviceID, deviceName, ourFingerprint, certMgr); pairErr != nil {
+			ui.PrintWarning("Failed to pair with %s: %v", peer.Name, pairErr)
+			continue
+		}
+		ui.PrintSuccess("✓ Paired with %s", peer.Name)
+		paired = true
+	}
+
+	if !paired {
+		return fmt.Errorf("failed to pair. Check code and try again")
+	}
+
+	return nil
+}
+
+func pairWithPeer(peer *storage.Peer, code, deviceID, deviceName, ourFingerprint string, certMgr *sync.CertificateManager) error {
+	fmt.Printf("Pairing with %s...\n", peer.Name)
+
 	transport := &http.Transport{
 		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: true,
@@ -407,62 +424,78 @@ func runSyncPair(cmd *cobra.Command, args []string) error {
 		Transport: transport,
 	}
 
-	var paired bool
-	for _, peer := range peers {
-		fmt.Printf("Pairing with %s...\n", peer.Name)
-
-		reqData := map[string]string{
-			"pairing_code":     code,
-			"device_id":        deviceID,
-			"device_name":      deviceName,
-			"cert_fingerprint": ourFingerprint,
-		}
-
-		body, _ := json.Marshal(reqData)
-		url := fmt.Sprintf("https://%s/sync/pair", peer.Address)
-
-		resp, err := client.Post(url, "application/json", bytes.NewReader(body))
-		if err != nil {
-			ui.PrintWarning("Failed: %v", err)
-			continue
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != http.StatusOK {
-			ui.PrintWarning("Rejected (status %d)", resp.StatusCode)
-			continue
-		}
-
-		var pairResp struct {
-			SharedSecret    string `json:"shared_secret"`
-			DeviceID        string `json:"device_id"`
-			DeviceName      string `json:"device_name"`
-			CertFingerprint string `json:"cert_fingerprint"`
-		}
-
-		if err := json.NewDecoder(resp.Body).Decode(&pairResp); err != nil {
-			ui.PrintWarning("Failed to parse response: %v", err)
-			continue
-		}
-
-		if err := store.SavePeerSecret(peer.ID, pairResp.SharedSecret); err != nil {
-			ui.PrintWarning("Failed to save secret: %v", err)
-			continue
-		}
-
-		if pairResp.CertFingerprint != "" {
-			if err := certMgr.SavePeerCertificate(peer.ID, pairResp.CertFingerprint); err != nil {
-				ui.PrintWarning("Failed to save cert: %v", err)
-				continue
-			}
-		}
-
-		ui.PrintSuccess("✓ Paired with %s", peer.Name)
-		paired = true
+	reqData := map[string]string{
+		"pairing_code":     code,
+		"device_id":        deviceID,
+		"device_name":      deviceName,
+		"cert_fingerprint": ourFingerprint,
 	}
 
-	if !paired {
-		return fmt.Errorf("failed to pair. Check code and try again")
+	body, _ := json.Marshal(reqData)
+	url := fmt.Sprintf("https://%s/sync/pair", peer.Address)
+
+	resp, err := client.Post(url, "application/json", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("connection failed: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return fmt.Errorf("rate limited, try again later")
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("rejected (status %d)", resp.StatusCode)
+	}
+
+	var pairResp struct {
+		SharedSecret    string `json:"shared_secret"`
+		DeviceID        string `json:"device_id"`
+		DeviceName      string `json:"device_name"`
+		CertFingerprint string `json:"cert_fingerprint"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&pairResp); err != nil {
+		return fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	if pairResp.CertFingerprint != "" && resp.TLS != nil && len(resp.TLS.PeerCertificates) > 0 {
+		tlsFingerprint := sync.ComputeCertFingerprint(resp.TLS.PeerCertificates[0])
+		if tlsFingerprint != pairResp.CertFingerprint {
+			return fmt.Errorf("certificate fingerprint mismatch (possible MITM attack)")
+		}
+	}
+
+	if pairResp.CertFingerprint == "" {
+		return fmt.Errorf("peer did not provide certificate fingerprint")
+	}
+
+	shortFingerprint := formatFingerprint(pairResp.CertFingerprint[:32])
+	fmt.Println()
+	ui.PrintWarning("SECURITY VERIFICATION REQUIRED")
+	fmt.Printf("Peer fingerprint from %s:\n", pairResp.DeviceName)
+	fmt.Printf("  %s\n", shortFingerprint)
+	fmt.Println()
+	fmt.Println("Compare this with the fingerprint shown on the other device.")
+	fmt.Println("If they match, the connection is secure.")
+	fmt.Println()
+
+	confirmed, err := ui.Confirm("Does this fingerprint match the other device?")
+	if err != nil {
+		return fmt.Errorf("failed to get confirmation: %w", err)
+	}
+	if !confirmed {
+		ui.PrintError("Pairing cancelled - fingerprint not verified")
+		ui.PrintError("This may indicate a man-in-the-middle attack!")
+		return fmt.Errorf("fingerprint verification failed")
+	}
+
+	if err := store.SavePeerSecret(peer.ID, pairResp.SharedSecret); err != nil {
+		return fmt.Errorf("failed to save secret: %w", err)
+	}
+
+	if err := certMgr.SavePeerCertificate(peer.ID, pairResp.CertFingerprint); err != nil {
+		return fmt.Errorf("failed to save cert: %w", err)
 	}
 
 	return nil
@@ -511,21 +544,75 @@ var pairCmd = &cobra.Command{
 	RunE:  runSyncPair,
 }
 
-func getDataDir() (string, error) {
-	var dataDir string
-	if os.Getenv("XDG_DATA_HOME") != "" {
-		dataDir = os.Getenv("XDG_DATA_HOME")
-	} else if home, err := os.UserHomeDir(); err == nil {
-		dataDir = filepath.Join(home, ".local", "share")
-	} else {
-		return "", fmt.Errorf("failed to determine home directory: %w", err)
-	}
-	return filepath.Join(dataDir, "doit"), nil
+var unpairCmd = &cobra.Command{
+	Use:   "unpair <device-id>",
+	Short: "Unpair a device",
+	Long:  "Remove pairing with a device (removes shared secrets and certificates)",
+	Args:  cobra.ExactArgs(1),
+	RunE:  runSyncUnpair,
 }
 
-func writePIDFile(path string) error {
-	pid := fmt.Sprintf("%d", os.Getpid())
-	return os.WriteFile(path, []byte(pid), 0644)
+func runSyncUnpair(cmd *cobra.Command, args []string) error {
+	if !sync.IsSyncEnabled(store.GetDB()) {
+		return fmt.Errorf("sync not enabled")
+	}
+
+	deviceID := args[0]
+
+	peers, err := store.GetPeers()
+	if err != nil {
+		return fmt.Errorf("failed to get peers: %w", err)
+	}
+
+	var matchedPeer *storage.Peer
+	for _, peer := range peers {
+		if peer.ID == deviceID || peer.ID[:8] == deviceID {
+			matchedPeer = peer
+			break
+		}
+	}
+
+	if matchedPeer == nil {
+		return fmt.Errorf("device not found: %s", deviceID)
+	}
+
+	confirmed, err := ui.Confirm(fmt.Sprintf("Unpair device '%s'? This will remove sync data.", matchedPeer.Name))
+	if err != nil {
+		return err
+	}
+	if !confirmed {
+		ui.PrintError("Unpair cancelled")
+		return nil
+	}
+
+	tx, err := store.GetDB().Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.Exec("DELETE FROM peer_secrets WHERE peer_id=?", matchedPeer.ID); err != nil {
+		return fmt.Errorf("failed to delete peer secret: %w", err)
+	}
+
+	if _, err := tx.Exec("DELETE FROM peer_certificates WHERE device_id=?", matchedPeer.ID); err != nil {
+		return fmt.Errorf("failed to delete peer certificate: %w", err)
+	}
+
+	if _, err := tx.Exec("DELETE FROM sync_state WHERE peer_id=?", matchedPeer.ID); err != nil {
+		return fmt.Errorf("failed to delete sync state: %w", err)
+	}
+
+	if _, err := tx.Exec("DELETE FROM peers WHERE id=?", matchedPeer.ID); err != nil {
+		return fmt.Errorf("failed to delete peer: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	ui.PrintSuccess("✓ Unpaired device '%s'", matchedPeer.Name)
+	return nil
 }
 
 func init() {
@@ -538,6 +625,7 @@ func init() {
 	syncCmd.AddCommand(daemonCmd)
 	syncCmd.AddCommand(showCmd)
 	syncCmd.AddCommand(pairCmd)
+	syncCmd.AddCommand(unpairCmd)
 
 	cleanupCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show what would be deleted without deleting")
 	cleanupCmd.Flags().BoolVar(&aggressive, "aggressive", false, "Delete all synced data ignoring retention periods (DANGEROUS)")

@@ -2,7 +2,11 @@ package sync
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
+
+	"github.com/akr411/doit/internal/storage"
+	"github.com/akr411/doit/internal/utils"
 )
 
 // Operation type constants define the four CRDT operation types.
@@ -33,7 +37,7 @@ func (op *Operation) Apply(db *sql.DB) error {
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	var exists bool
 	err = tx.QueryRow("SELECT EXISTS(SELECT 1 FROM operations WHERE id=?)", op.ID).Scan(&exists)
@@ -52,26 +56,67 @@ func (op *Operation) Apply(db *sql.DB) error {
 		return fmt.Errorf("failed to insert operation: %w", err)
 	}
 
-	switch op.Type {
-	case OpTypeCreate:
-		if err := applyCreateInTx(tx, op); err != nil {
-			return err
-		}
-	case OpTypeUpdate:
-		if err := applyUpdateInTx(tx, op); err != nil {
-			return err
-		}
-	case OpTypeComplete:
-		if err := applyCompleteInTx(tx, op); err != nil {
-			return err
-		}
-	case OpTypeDelete:
-		if err := applyDeleteInTx(tx, op); err != nil {
-			return err
-		}
-	default:
-		return fmt.Errorf("unknown operation type: %s", op.Type)
+	if err := applyOperationInTx(tx, op); err != nil {
+		return err
 	}
 
 	return tx.Commit()
+}
+
+// ApplyWithValidation applies the operation after validating the data.
+// This should be used when receiving operations from peers to prevent
+// injection of malicious data through sync.
+func (op *Operation) ApplyWithValidation(db *sql.DB) error {
+	if op.Type == OpTypeCreate || op.Type == OpTypeUpdate || op.Type == OpTypeComplete {
+		if err := op.validateData(); err != nil {
+			return fmt.Errorf("invalid operation data: %w", err)
+		}
+	}
+	return op.Apply(db)
+}
+
+func (op *Operation) validateData() error {
+	if len(op.Data) == 0 {
+		return nil
+	}
+
+	var data map[string]interface{}
+	if err := json.Unmarshal(op.Data, &data); err != nil {
+		return fmt.Errorf("invalid JSON: %w", err)
+	}
+
+	if task, ok := data["task"].(string); ok {
+		if err := utils.ValidateTask(task); err != nil {
+			return fmt.Errorf("invalid task: %w", err)
+		}
+	}
+
+	if note, ok := data["note"].(string); ok && note != "" {
+		if err := utils.ValidateNote(note); err != nil {
+			return fmt.Errorf("invalid note: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// OperationFromData converts storage.OperationData to sync.Operation.
+func OperationFromData(opData storage.OperationData) Operation {
+	return Operation{
+		ID:        opData.ID,
+		Type:      opData.Type,
+		TodoID:    opData.TodoID,
+		Data:      []byte(opData.Data),
+		Timestamp: opData.Timestamp,
+		DeviceID:  opData.DeviceID,
+	}
+}
+
+// OperationsFromData converts a slice of storage.OperationData to []Operation.
+func OperationsFromData(ops []storage.OperationData) []Operation {
+	operations := make([]Operation, len(ops))
+	for i, opData := range ops {
+		operations[i] = OperationFromData(opData)
+	}
+	return operations
 }

@@ -34,16 +34,16 @@ func TestLogging(t *testing.T) {
 
 	log := string(content)
 
-	if !strings.Contains(log, "[DEBUG]") {
+	if !strings.Contains(log, "level=DEBUG") {
 		t.Error("DEBUG log not written")
 	}
-	if !strings.Contains(log, "[INFO]") {
+	if !strings.Contains(log, "level=INFO") {
 		t.Error("INFO log not written")
 	}
-	if !strings.Contains(log, "[WARN]") {
+	if !strings.Contains(log, "level=WARN") {
 		t.Error("WARN log not written")
 	}
-	if !strings.Contains(log, "[ERROR]") {
+	if !strings.Contains(log, "level=ERROR") {
 		t.Error("ERROR log not written")
 	}
 }

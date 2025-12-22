@@ -82,6 +82,6 @@ var addCmd = &cobra.Command{
 func init() {
 	addCmd.Flags().StringVarP(&addTask, "task", "t", "", "Task description")
 	addCmd.Flags().StringVarP(&addNote, "note", "n", "", "Optional note")
-	addCmd.Flags().StringVarP(&addDeadline, "deadline", "d", "", "Deadline (e.g., 2h, 1d, 2025-12-01)")
+	addCmd.Flags().StringVarP(&addDeadline, "deadline", "d", "", "Deadline (e.g., 30m, 2h, 1d, 1M, 2025-12-01)")
 	rootCmd.AddCommand(addCmd)
 }

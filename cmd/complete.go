@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"time"
 
 	"github.com/akr411/doit/internal/ui"
 	"github.com/akr411/doit/internal/utils"
@@ -39,7 +38,7 @@ var completeCmd = &cobra.Command{
 				return err
 			}
 
-			if err := updateStreak(); err != nil {
+			if err := store.RecordCompletion(); err != nil {
 				ui.PrintWarning("Warning: failed to update streak: %v", err)
 			}
 		}
@@ -55,46 +54,6 @@ var completeCmd = &cobra.Command{
 		}
 		return nil
 	},
-}
-
-func updateStreak() error {
-	streaksEnabled, _ := store.GetConfig("streaks_enabled")
-	if streaksEnabled == "false" {
-		return nil
-	}
-
-	streak, err := store.GetStreak()
-	if err != nil {
-		return err
-	}
-
-	now := time.Now()
-	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).Unix()
-
-	if streak.LastCompletedAt == 0 {
-		streak.CurrentStreak = 1
-		streak.MaxStreak = 1
-	} else {
-		lastDayTime := time.Unix(streak.LastCompletedAt, 0)
-		lastDay := time.Date(lastDayTime.Year(), lastDayTime.Month(), lastDayTime.Day(), 0, 0, 0, 0, lastDayTime.Location()).Unix()
-
-		daysDiff := (today - lastDay) / 86400
-
-		if daysDiff == 0 {
-		} else if daysDiff == 1 {
-			streak.CurrentStreak++
-			if streak.CurrentStreak > streak.MaxStreak {
-				streak.MaxStreak = streak.CurrentStreak
-			}
-		} else {
-			streak.CurrentStreak = 1
-		}
-	}
-
-	streak.TotalCompleted++
-	streak.LastCompletedAt = now.Unix()
-
-	return store.UpdateStreak(streak)
 }
 
 func init() {

@@ -29,7 +29,7 @@ var deleteCmd = &cobra.Command{
 				return err
 			}
 			if !deleteYes {
-				confirmed, err := ui.RunConfirmation(fmt.Sprintf("Delete ALL %d todo(s)? This cannot be undone!", len(todos)))
+				confirmed, err := ui.Confirm(fmt.Sprintf("Delete ALL %d todo(s)? This cannot be undone!", len(todos)))
 				if err != nil || !confirmed {
 					return err
 				}
@@ -59,7 +59,7 @@ var deleteCmd = &cobra.Command{
 				return nil
 			}
 			if !deleteYes {
-				confirmed, err := ui.RunConfirmation(fmt.Sprintf("Delete %d completed todo(s)?", len(completedTodos)))
+				confirmed, err := ui.Confirm(fmt.Sprintf("Delete %d completed todo(s)?", len(completedTodos)))
 				if err != nil || !confirmed {
 					return err
 				}
@@ -94,7 +94,7 @@ var deleteCmd = &cobra.Command{
 				return nil
 			}
 
-			confirmed, err := ui.RunConfirmation(fmt.Sprintf("Delete %d todo(s)?", len(indices)))
+			confirmed, err := ui.Confirm(fmt.Sprintf("Delete %d todo(s)?", len(indices)))
 			if err != nil || !confirmed {
 				return err
 			}
@@ -120,7 +120,7 @@ var deleteCmd = &cobra.Command{
 			} else {
 				message = fmt.Sprintf("Delete %d todo(s)?", len(args))
 			}
-			confirmed, err := ui.RunConfirmation(message)
+			confirmed, err := ui.Confirm(message)
 			if err != nil || !confirmed {
 				return err
 			}

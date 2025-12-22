@@ -7,7 +7,7 @@
 //
 // Operations: CRDT operations (CREATE, UPDATE, COMPLETE, DELETE)
 //
-// Pairing: Device pairing with 6-digit codes and TLS certificate exchange
+// Pairing: Device pairing with 8-digit codes (XXXX-XXXX) and TLS certificate exchange
 //
 // Protocol: Pull/Push sync over HTTPS with mTLS authentication
 //
@@ -18,5 +18,5 @@
 // # Security
 //
 // All traffic encrypted with TLS 1.3, mutual authentication via certificates,
-// pairing codes expire in 15 minutes.
+// pairing codes expire in 5 minutes.
 package sync

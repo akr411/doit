@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -46,14 +47,14 @@ func NewTodoForm(todo *models.Todo) TodoForm {
 	na.BlurredStyle.CursorLine = UnselectedStyle
 
 	di := textinput.New()
-	di.Placeholder = "2h, 1d, 2025-12-31"
+	di.Placeholder = "30m, 2h, 1d, 1M, 2025-12-31"
 	di.Width = 30
 
 	if todo != nil {
 		ti.SetValue(todo.Task)
 		na.SetValue(todo.Note)
 		if todo.Deadline > 0 {
-			di.SetValue(utils.FormatDeadline(todo.Deadline))
+			di.SetValue(time.Unix(todo.Deadline, 0).Format("2006-01-02 15:04"))
 		}
 	}
 

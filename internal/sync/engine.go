@@ -2,12 +2,14 @@ package sync
 
 import (
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
+	"github.com/akr411/doit/internal/logging"
 	"github.com/akr411/doit/internal/storage"
 )
+
+const maxConcurrentSyncs = 5
 
 // SyncEngine coordinates all P2P synchronization components.
 // It manages the sync server, client, local discovery, and peer management.
@@ -21,6 +23,8 @@ type SyncEngine struct {
 	stopCh    chan struct{}
 	mu        sync.RWMutex
 	running   bool
+	syncSem   chan struct{}
+	syncWg    sync.WaitGroup
 }
 
 // NewSyncEngine creates a sync engine with all required components.
@@ -48,6 +52,7 @@ func NewSyncEngine(store *storage.Storage) (*SyncEngine, error) {
 		client:    client,
 		peerMgr:   peerMgr,
 		stopCh:    make(chan struct{}),
+		syncSem:   make(chan struct{}, maxConcurrentSyncs),
 	}, nil
 }
 
@@ -64,7 +69,7 @@ func (se *SyncEngine) Start() error {
 	se.mu.Unlock()
 
 	if err := se.peerMgr.LoadActivePeers(); err != nil {
-		log.Printf("Failed to load active peers: %v", err)
+		logging.Warn("Failed to load active peers: %v", err)
 	}
 
 	port := GetSyncPort(se.store.GetDB())
@@ -76,7 +81,7 @@ func (se *SyncEngine) Start() error {
 
 	actualPort := se.server.GetPort()
 	if err := se.discovery.Start(actualPort); err != nil {
-		se.server.Stop()
+		_ = se.server.Stop()
 		se.running = false
 		return fmt.Errorf("failed to start discovery: %w", err)
 	}
@@ -87,7 +92,7 @@ func (se *SyncEngine) Start() error {
 }
 
 // Stop gracefully shuts down the sync engine.
-// Stops the sync loop, discovery service, and server.
+// Stops the sync loop, waits for active syncs, then stops discovery and server.
 // Safe to call multiple times - no-op if not running.
 func (se *SyncEngine) Stop() error {
 	se.mu.Lock()
@@ -95,20 +100,18 @@ func (se *SyncEngine) Stop() error {
 		se.mu.Unlock()
 		return nil
 	}
-	se.mu.Unlock()
-
-	close(se.stopCh)
-
-	se.mu.Lock()
 	se.running = false
+	close(se.stopCh)
 	se.mu.Unlock()
+
+	se.syncWg.Wait()
 
 	if err := se.discovery.Stop(); err != nil {
-		log.Printf("Failed to stop discovery: %v", err)
+		logging.Warn("Failed to stop discovery: %v", err)
 	}
 
 	if err := se.server.Stop(); err != nil {
-		log.Printf("Failed to stop server: %v", err)
+		logging.Warn("Failed to stop server: %v", err)
 	}
 
 	return nil
@@ -140,7 +143,20 @@ func (se *SyncEngine) syncWithAllPeers() {
 	peers := se.peerMgr.GetActivePeersList()
 
 	for _, peer := range peers {
-		go se.syncWithPeer(peer)
+		select {
+		case se.syncSem <- struct{}{}:
+			se.syncWg.Add(1)
+			go func(p *Peer) {
+				defer func() {
+					<-se.syncSem
+					se.syncWg.Done()
+				}()
+				se.syncWithPeer(p)
+			}(peer)
+		case <-se.stopCh:
+			return
+		default:
+		}
 	}
 }
 
@@ -148,27 +164,27 @@ func (se *SyncEngine) syncWithPeer(peer *Peer) {
 	timeSinceLastSeen := time.Since(time.Unix(0, peer.LastSeen))
 	if timeSinceLastSeen > 5*time.Minute {
 		if err := se.peerMgr.UpdatePeerStatus(peer.ID, "disconnected"); err != nil {
-			log.Printf("Failed to update peer status for %s: %v", peer.Name, err)
+			logging.Warn("Failed to update peer status for %s: %v", peer.Name, err)
 		}
 		return
 	}
 
 	if err := se.peerMgr.UpdatePeerStatus(peer.ID, "syncing"); err != nil {
-		log.Printf("Failed to update peer status for %s: %v", peer.Name, err)
+		logging.Warn("Failed to update peer status for %s: %v", peer.Name, err)
 		return
 	}
 
 	if err := se.client.InitialSync(peer); err != nil {
-		log.Printf("Failed to sync with %s: %v", peer.Name, err)
-		se.peerMgr.UpdatePeerStatus(peer.ID, "disconnected")
+		logging.Debug("Failed to sync with %s: %v", peer.Name, err)
+		_ = se.peerMgr.UpdatePeerStatus(peer.ID, "disconnected")
 		return
 	}
 
 	if err := se.peerMgr.UpdatePeerStatus(peer.ID, "connected"); err != nil {
-		log.Printf("Failed to update peer status for %s: %v", peer.Name, err)
+		logging.Warn("Failed to update peer status for %s: %v", peer.Name, err)
 	}
 
 	if err := se.store.UpdatePeerLastSeen(peer.ID, time.Now().UnixNano()); err != nil {
-		log.Printf("Failed to update peer last_seen for %s: %v", peer.Name, err)
+		logging.Warn("Failed to update peer last_seen for %s: %v", peer.Name, err)
 	}
 }

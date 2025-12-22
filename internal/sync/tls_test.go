@@ -2,7 +2,9 @@ package sync
 
 import (
 	"crypto/tls"
+	"crypto/x509"
 	"database/sql"
+	"encoding/pem"
 	"testing"
 
 	_ "modernc.org/sqlite"
@@ -32,7 +34,7 @@ func setupTLSTestDB(t *testing.T) *sql.DB {
 
 func TestGenerateSelfSignedCert(t *testing.T) {
 	db := setupTLSTestDB(t)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	cm := NewCertificateManager(db)
 
@@ -68,7 +70,7 @@ func TestGenerateSelfSignedCert(t *testing.T) {
 
 func TestCertificateIdempotency(t *testing.T) {
 	db := setupTLSTestDB(t)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	cm := NewCertificateManager(db)
 
@@ -104,10 +106,10 @@ func TestGetTLSConfig(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			db := setupTLSTestDB(t)
-			defer db.Close()
+			defer func() { _ = db.Close() }()
 
 			cm := NewCertificateManager(db)
-			cm.GenerateSelfSignedCert("device-test")
+			_ = cm.GenerateSelfSignedCert("device-test")
 
 			config, err := cm.GetTLSConfig(tt.isServer)
 			if err != nil {
@@ -135,7 +137,7 @@ func TestGetTLSConfig(t *testing.T) {
 
 func TestSavePeerCertificate(t *testing.T) {
 	db := setupTLSTestDB(t)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	cm := NewCertificateManager(db)
 
@@ -158,5 +160,254 @@ func TestSavePeerCertificate(t *testing.T) {
 
 	if storedFP != fingerprint {
 		t.Errorf("Expected fingerprint %s, got %s", fingerprint, storedFP)
+	}
+}
+
+func TestSavePeerCertificateUpdate(t *testing.T) {
+	db := setupTLSTestDB(t)
+	defer func() { _ = db.Close() }()
+
+	cm := NewCertificateManager(db)
+
+	peerID := "peer-device-123"
+	fp1 := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	fp2 := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+	_ = cm.SavePeerCertificate(peerID, fp1)
+	_ = cm.SavePeerCertificate(peerID, fp2)
+
+	var storedFP string
+	_ = db.QueryRow(`
+		SELECT fingerprint FROM peer_certificates WHERE device_id = ?
+	`, peerID).Scan(&storedFP)
+
+	if storedFP != fp2 {
+		t.Errorf("Expected fingerprint to be updated to %s, got %s", fp2, storedFP)
+	}
+}
+
+func TestGetFingerprintNotFound(t *testing.T) {
+	db := setupTLSTestDB(t)
+	defer func() { _ = db.Close() }()
+
+	cm := NewCertificateManager(db)
+
+	_, err := cm.GetFingerprint()
+	if err == nil {
+		t.Error("expected error when fingerprint not found")
+	}
+}
+
+func TestGetTLSConfigNoCert(t *testing.T) {
+	db := setupTLSTestDB(t)
+	defer func() { _ = db.Close() }()
+
+	cm := NewCertificateManager(db)
+
+	_, err := cm.GetTLSConfig(true)
+	if err == nil {
+		t.Error("expected error when no cert exists")
+	}
+}
+
+func TestCheckCertValidity(t *testing.T) {
+	db := setupTLSTestDB(t)
+	defer func() { _ = db.Close() }()
+
+	cm := NewCertificateManager(db)
+
+	err := cm.CheckCertValidity()
+	if err == nil {
+		t.Error("expected error when no cert exists")
+	}
+
+	_ = cm.GenerateSelfSignedCert("test-device")
+
+	err = cm.CheckCertValidity()
+	if err != nil {
+		t.Errorf("CheckCertValidity failed for valid cert: %v", err)
+	}
+}
+
+func TestCheckCertValidityInvalidPEM(t *testing.T) {
+	db := setupTLSTestDB(t)
+	defer func() { _ = db.Close() }()
+
+	cm := NewCertificateManager(db)
+
+	_, _ = db.Exec(`INSERT INTO config (key, value) VALUES ('tls_cert', 'invalid pem data')`)
+
+	err := cm.CheckCertValidity()
+	if err == nil {
+		t.Error("expected error for invalid PEM")
+	}
+}
+
+func TestRegenerateCertIfExpiredNoCert(t *testing.T) {
+	db := setupTLSTestDB(t)
+	defer func() { _ = db.Close() }()
+
+	cm := NewCertificateManager(db)
+
+	regenerated, err := cm.RegenerateCertIfExpired("test-device")
+	if err != nil {
+		t.Fatalf("RegenerateCertIfExpired failed: %v", err)
+	}
+
+	if !regenerated {
+		t.Error("expected cert to be generated when none exists")
+	}
+
+	fp, err := cm.GetFingerprint()
+	if err != nil {
+		t.Error("fingerprint should exist after regeneration")
+	}
+	if len(fp) != 64 {
+		t.Errorf("expected 64-char fingerprint, got %d", len(fp))
+	}
+}
+
+func TestRegenerateCertIfExpiredValidCert(t *testing.T) {
+	db := setupTLSTestDB(t)
+	defer func() { _ = db.Close() }()
+
+	cm := NewCertificateManager(db)
+
+	_ = cm.GenerateSelfSignedCert("test-device")
+	fp1, _ := cm.GetFingerprint()
+
+	regenerated, err := cm.RegenerateCertIfExpired("test-device")
+	if err != nil {
+		t.Fatalf("RegenerateCertIfExpired failed: %v", err)
+	}
+
+	if regenerated {
+		t.Error("valid cert should not be regenerated")
+	}
+
+	fp2, _ := cm.GetFingerprint()
+	if fp1 != fp2 {
+		t.Error("fingerprint should not change for valid cert")
+	}
+}
+
+func TestRegenerateCertIfExpiredInvalidPEM(t *testing.T) {
+	db := setupTLSTestDB(t)
+	defer func() { _ = db.Close() }()
+
+	cm := NewCertificateManager(db)
+
+	_, _ = db.Exec(`INSERT INTO config (key, value) VALUES ('tls_cert', 'invalid pem')`)
+
+	regenerated, err := cm.RegenerateCertIfExpired("test-device")
+	if err != nil {
+		t.Fatalf("RegenerateCertIfExpired failed: %v", err)
+	}
+
+	if !regenerated {
+		t.Error("expected cert to be regenerated for invalid PEM")
+	}
+}
+
+func TestComputeCertFingerprint(t *testing.T) {
+	db := setupTLSTestDB(t)
+	defer func() { _ = db.Close() }()
+
+	cm := NewCertificateManager(db)
+	_ = cm.GenerateSelfSignedCert("test-device")
+
+	var certPEM string
+	_ = db.QueryRow(`SELECT value FROM config WHERE key='tls_cert'`).Scan(&certPEM)
+
+	block, _ := pem.Decode([]byte(certPEM))
+	cert, _ := x509.ParseCertificate(block.Bytes)
+
+	fp := ComputeCertFingerprint(cert)
+
+	storedFP, _ := cm.GetFingerprint()
+
+	if fp != storedFP {
+		t.Errorf("ComputeCertFingerprint mismatch: got %s, want %s", fp, storedFP)
+	}
+}
+
+func TestNewCertificateManager(t *testing.T) {
+	db := setupTLSTestDB(t)
+	defer func() { _ = db.Close() }()
+
+	cm := NewCertificateManager(db)
+	if cm == nil {
+		t.Fatal("NewCertificateManager returned nil")
+	}
+	if cm.db != db {
+		t.Error("db not set correctly")
+	}
+}
+
+func TestVerifyPeerCertNoCerts(t *testing.T) {
+	db := setupTLSTestDB(t)
+	defer func() { _ = db.Close() }()
+
+	cm := NewCertificateManager(db)
+
+	err := cm.verifyPeerCert([][]byte{}, nil)
+	if err == nil {
+		t.Error("expected error for no certificate")
+	}
+}
+
+func TestVerifyPeerCertUnknownPeer(t *testing.T) {
+	db := setupTLSTestDB(t)
+	defer func() { _ = db.Close() }()
+
+	cm := NewCertificateManager(db)
+	_ = cm.GenerateSelfSignedCert("test-device")
+
+	var certPEM string
+	_ = db.QueryRow(`SELECT value FROM config WHERE key='tls_cert'`).Scan(&certPEM)
+	block, _ := pem.Decode([]byte(certPEM))
+
+	err := cm.verifyPeerCert([][]byte{block.Bytes}, nil)
+	if err == nil {
+		t.Error("expected error for unknown peer")
+	}
+}
+
+func TestVerifyPeerCertFingerprintMismatch(t *testing.T) {
+	db := setupTLSTestDB(t)
+	defer func() { _ = db.Close() }()
+
+	cm := NewCertificateManager(db)
+	_ = cm.GenerateSelfSignedCert("test-device")
+
+	_ = cm.SavePeerCertificate("test-device", "wrongfingerprintwrongfingerprintwrongfingerprintwrongfingerpri")
+
+	var certPEM string
+	_ = db.QueryRow(`SELECT value FROM config WHERE key='tls_cert'`).Scan(&certPEM)
+	block, _ := pem.Decode([]byte(certPEM))
+
+	err := cm.verifyPeerCert([][]byte{block.Bytes}, nil)
+	if err == nil {
+		t.Error("expected error for fingerprint mismatch")
+	}
+}
+
+func TestVerifyPeerCertSuccess(t *testing.T) {
+	db := setupTLSTestDB(t)
+	defer func() { _ = db.Close() }()
+
+	cm := NewCertificateManager(db)
+	_ = cm.GenerateSelfSignedCert("test-device")
+
+	fp, _ := cm.GetFingerprint()
+	_ = cm.SavePeerCertificate("test-device", fp)
+
+	var certPEM string
+	_ = db.QueryRow(`SELECT value FROM config WHERE key='tls_cert'`).Scan(&certPEM)
+	block, _ := pem.Decode([]byte(certPEM))
+
+	err := cm.verifyPeerCert([][]byte{block.Bytes}, nil)
+	if err != nil {
+		t.Errorf("verifyPeerCert failed: %v", err)
 	}
 }

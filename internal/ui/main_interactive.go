@@ -74,10 +74,10 @@ func (m MainInteractive) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				todo, err := m.form.GetTodo()
 				if err == nil && todo != nil {
 					if m.mode == modeAdd {
-						m.store.SaveTodo(todo)
+						_ = m.store.SaveTodo(todo)
 					} else {
 						todo.UpdatedAt = time.Now().Unix()
-						m.store.UpdateTodo(todo)
+						_ = m.store.UpdateTodo(todo)
 					}
 					m.refresh()
 				}
@@ -97,7 +97,7 @@ func (m MainInteractive) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "y", "Y":
 				todo := m.getTodoAtCursor()
 				if todo != nil {
-					m.store.DeleteTodo(todo.ID)
+					_ = m.store.DeleteTodo(todo.ID)
 					m.refresh()
 					totalItems := len(m.pendingTodos) + len(m.completedTodos)
 					if m.cursor >= totalItems && m.cursor > 0 {
@@ -214,7 +214,7 @@ func (m MainInteractive) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if todo != nil && todo.Note != "" {
 					lines := strings.Count(todo.Note, "\n") + 1
 					if lines > 10 {
-						RunNoteViewer(todo.Note)
+						_ = RunNoteViewer(todo.Note)
 						m.refresh()
 					} else {
 						m.expandedNote = m.cursor
@@ -225,9 +225,9 @@ func (m MainInteractive) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			todo := m.getTodoAtCursor()
 			if todo != nil {
 				wasCompleted := todo.Completed
-				m.store.CompleteTodo(todo.ID, !todo.Completed)
+				_ = m.store.CompleteTodo(todo.ID, !todo.Completed)
 				if !wasCompleted {
-					if err := updateStreakForStore(m.store); err != nil {
+					if err := m.store.RecordCompletion(); err != nil {
 						m.warningMsg = fmt.Sprintf("Warning: %v", err)
 					}
 					if err := m.store.CleanupOldCompleted(); err != nil {
@@ -320,10 +320,10 @@ func (m MainInteractive) View() string {
 	}
 
 	var syncEnabled string
-	m.store.GetDB().QueryRow("SELECT value FROM config WHERE key='sync_enabled'").Scan(&syncEnabled)
+	_ = m.store.GetDB().QueryRow("SELECT value FROM config WHERE key='sync_enabled'").Scan(&syncEnabled)
 	if syncEnabled == "true" {
 		var peerCount int
-		m.store.GetDB().QueryRow("SELECT COUNT(*) FROM peers").Scan(&peerCount)
+		_ = m.store.GetDB().QueryRow("SELECT COUNT(*) FROM peers").Scan(&peerCount)
 		if peerCount > 0 {
 			title += fmt.Sprintf(" | ⟳ %d device%s", peerCount, map[bool]string{true: "", false: "s"}[peerCount == 1])
 		} else {
@@ -429,49 +429,6 @@ func (m MainInteractive) renderTodo(todo *models.Todo, idx int, now int64) strin
 	}
 
 	return result
-}
-
-func updateStreakForStore(store *storage.Storage) error {
-	streaksEnabled, _ := store.GetConfig("streaks_enabled")
-	if streaksEnabled == "false" {
-		return nil
-	}
-
-	streak, err := store.GetStreak()
-	if err != nil {
-		return fmt.Errorf("failed to get streak: %w", err)
-	}
-
-	now := time.Now()
-	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).Unix()
-
-	if streak.LastCompletedAt == 0 {
-		streak.CurrentStreak = 1
-		streak.MaxStreak = 1
-	} else {
-		lastDayTime := time.Unix(streak.LastCompletedAt, 0)
-		lastDay := time.Date(lastDayTime.Year(), lastDayTime.Month(), lastDayTime.Day(), 0, 0, 0, 0, lastDayTime.Location()).Unix()
-
-		daysDiff := (today - lastDay) / 86400
-
-		if daysDiff == 0 {
-		} else if daysDiff == 1 {
-			streak.CurrentStreak++
-			if streak.CurrentStreak > streak.MaxStreak {
-				streak.MaxStreak = streak.CurrentStreak
-			}
-		} else {
-			streak.CurrentStreak = 1
-		}
-	}
-
-	streak.TotalCompleted++
-	streak.LastCompletedAt = now.Unix()
-
-	if err := store.UpdateStreak(streak); err != nil {
-		return fmt.Errorf("failed to update streak: %w", err)
-	}
-	return nil
 }
 
 func RunMainInteractive(store *storage.Storage, pageSize int) error {

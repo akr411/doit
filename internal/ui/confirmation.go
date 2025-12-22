@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-func RunConfirmation(message string) (bool, error) {
+func Confirm(message string) (bool, error) {
 	fmt.Printf("%s (y/n): ", message)
 
 	scanner := bufio.NewScanner(os.Stdin)
@@ -17,8 +17,4 @@ func RunConfirmation(message string) (bool, error) {
 
 	response := strings.ToLower(strings.TrimSpace(scanner.Text()))
 	return response == "y" || response == "yes", nil
-}
-
-func Confirm(message string) (bool, error) {
-	return RunConfirmation(message)
 }

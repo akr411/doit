@@ -24,9 +24,9 @@ func setupTestDB(t *testing.T) (*Storage, func()) {
 	}
 
 	cleanup := func() {
-		s.Close()
+		_ = s.Close()
 		getDBPath = origGetDBPath
-		os.RemoveAll(tmpDir)
+		_ = os.RemoveAll(tmpDir)
 	}
 
 	return s, cleanup
@@ -68,9 +68,9 @@ func TestGetAllTodos(t *testing.T) {
 	todo3 := models.NewTodo("Task 3", "", 0)
 	todo3.Completed = true
 
-	s.SaveTodo(todo1)
-	s.SaveTodo(todo2)
-	s.SaveTodo(todo3)
+	_ = s.SaveTodo(todo1)
+	_ = s.SaveTodo(todo2)
+	_ = s.SaveTodo(todo3)
 
 	todos, err := s.GetAllTodos()
 	if err != nil {
@@ -87,7 +87,7 @@ func TestUpdateTodo(t *testing.T) {
 	defer cleanup()
 
 	todo := models.NewTodo("Original task", "", 0)
-	s.SaveTodo(todo)
+	_ = s.SaveTodo(todo)
 
 	todo.Task = "Updated task"
 	todo.Completed = true
@@ -115,7 +115,7 @@ func TestDeleteTodo(t *testing.T) {
 	defer cleanup()
 
 	todo := models.NewTodo("To be deleted", "", 0)
-	s.SaveTodo(todo)
+	_ = s.SaveTodo(todo)
 
 	if err := s.DeleteTodo(todo.ID); err != nil {
 		t.Fatalf("DeleteTodo failed: %v", err)

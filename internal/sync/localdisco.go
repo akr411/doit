@@ -5,10 +5,11 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"fmt"
-	"log"
 	"net"
 	"sync"
 	"time"
+
+	"github.com/akr411/doit/internal/logging"
 )
 
 const (
@@ -38,6 +39,7 @@ type LocalDiscovery struct {
 	stopCh  chan struct{}
 	mu      sync.Mutex
 	running bool
+	wg      sync.WaitGroup
 }
 
 // AnnouncementPacket is the UDP broadcast message for peer discovery.
@@ -83,7 +85,7 @@ func (ld *LocalDiscovery) Start(port int) error {
 	}
 
 	if err := conn4.SetReadBuffer(1048576); err != nil {
-		log.Printf("[WARN] Failed to set read buffer: %v", err)
+		logging.Warn(" Failed to set read buffer: %v", err)
 	}
 
 	ld.conn4 = conn4
@@ -94,15 +96,16 @@ func (ld *LocalDiscovery) Start(port int) error {
 	}
 	conn6, err := net.ListenUDP("udp6", addr6)
 	if err != nil {
-		log.Printf("[WARN] Failed to bind IPv6 UDP: %v", err)
+		logging.Warn(" Failed to bind IPv6 UDP: %v", err)
 	} else {
 		ld.conn6 = conn6
 	}
 
+	ld.wg.Add(2)
 	go ld.announceLoop()
 	go ld.receiveLoop()
 
-	log.Printf("[INFO] Local discovery started on port %d", DiscoveryPort)
+	logging.Info(" Local discovery started on port %d", DiscoveryPort)
 
 	return nil
 }
@@ -122,16 +125,21 @@ func (ld *LocalDiscovery) Stop() error {
 	close(ld.stopCh)
 
 	if ld.conn4 != nil {
-		ld.conn4.Close()
+		_ = ld.conn4.SetReadDeadline(time.Now())
+		_ = ld.conn4.Close()
 	}
 	if ld.conn6 != nil {
-		ld.conn6.Close()
+		_ = ld.conn6.SetReadDeadline(time.Now())
+		_ = ld.conn6.Close()
 	}
+
+	ld.wg.Wait()
 
 	return nil
 }
 
 func (ld *LocalDiscovery) announceLoop() {
+	defer ld.wg.Done()
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 
@@ -150,7 +158,7 @@ func (ld *LocalDiscovery) announceLoop() {
 func (ld *LocalDiscovery) announce() {
 	deviceID, err := GetDeviceID(ld.store.GetDB())
 	if err != nil {
-		log.Printf("[ERROR] Failed to get device ID: %v", err)
+		logging.Error(" Failed to get device ID: %v", err)
 		return
 	}
 
@@ -165,7 +173,7 @@ func (ld *LocalDiscovery) announce() {
 
 	data, err := packet.Marshal()
 	if err != nil {
-		log.Printf("[ERROR] Failed to marshal packet: %v", err)
+		logging.Error(" Failed to marshal packet: %v", err)
 		return
 	}
 
@@ -177,7 +185,7 @@ func (ld *LocalDiscovery) announce() {
 	if ld.conn4 != nil {
 		_, err = ld.conn4.WriteToUDP(data, broadcastAddr)
 		if err != nil {
-			log.Printf("Failed to send IPv4 broadcast: %v", err)
+			logging.Warn("Failed to send IPv4 broadcast: %v", err)
 		}
 	}
 
@@ -188,15 +196,16 @@ func (ld *LocalDiscovery) announce() {
 		}
 		_, err = ld.conn6.WriteToUDP(data, multicastAddr)
 		if err != nil {
-			log.Printf("Failed to send IPv6 multicast: %v", err)
+			logging.Warn("Failed to send IPv6 multicast: %v", err)
 		}
 	}
 }
 
 func (ld *LocalDiscovery) receiveLoop() {
+	defer ld.wg.Done()
 	ourID, err := GetDeviceID(ld.store.GetDB())
 	if err != nil {
-		log.Printf("[ERROR] Failed to get device ID: %v", err)
+		logging.Error(" Failed to get device ID: %v", err)
 		return
 	}
 
@@ -209,6 +218,13 @@ func (ld *LocalDiscovery) receiveLoop() {
 		default:
 		}
 
+		ld.mu.Lock()
+		running := ld.running
+		ld.mu.Unlock()
+		if !running {
+			return
+		}
+
 		ld.readUDPConnection(ld.conn4, buf, ourID, "IPv4")
 		ld.readUDPConnection(ld.conn6, buf, ourID, "IPv6")
 	}
@@ -219,7 +235,7 @@ func (ld *LocalDiscovery) readUDPConnection(conn *net.UDPConn, buf []byte, ourID
 		return
 	}
 
-	conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	_ = conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 	n, addr, err := conn.ReadFromUDP(buf)
 	if err != nil {
 		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
@@ -228,7 +244,7 @@ func (ld *LocalDiscovery) readUDPConnection(conn *net.UDPConn, buf []byte, ourID
 		select {
 		case <-ld.stopCh:
 		default:
-			log.Printf("Failed to read %s UDP: %v", ipVersion, err)
+			logging.Warn("Failed to read %s UDP: %v", ipVersion, err)
 		}
 		return
 	}
@@ -260,9 +276,9 @@ func (ld *LocalDiscovery) processPacket(data []byte, srcIP net.IP, ourID string)
 	}
 
 	if err := ld.peerMgr.AddOrUpdatePeer(peer); err != nil {
-		log.Printf("Failed to add peer: %v", err)
+		logging.Warn("Failed to add peer: %v", err)
 	} else {
-		log.Printf("[INFO] Discovered peer: %s (%s)", peer.Name, peer.Address)
+		logging.Info(" Discovered peer: %s (%s)", peer.Name, peer.Address)
 	}
 }
 
