@@ -29,7 +29,8 @@ var noteCmd = &cobra.Command{
 			return nil
 		}
 
-		fmt.Println(ui.SelectedStyle.Render(todo.Task))
+		fmt.Println(ui.TitleStyle.Render(todo.Task))
+		fmt.Println()
 		fmt.Println(todo.Note)
 
 		return nil
