@@ -31,15 +31,14 @@ type LocalDiscoveryPeerManager interface {
 // It broadcasts announcement packets every 10 seconds and listens for peer announcements.
 // Supports both IPv4 and IPv6 on port 49151.
 type LocalDiscovery struct {
-	store   LocalDiscoveryStore
-	peerMgr LocalDiscoveryPeerManager
-	port    int
-	conn4   *net.UDPConn
-	conn6   *net.UDPConn
-	stopCh  chan struct{}
-	mu      sync.Mutex
-	running bool
-	wg      sync.WaitGroup
+	store    LocalDiscoveryStore
+	peerMgr  LocalDiscoveryPeerManager
+	port     int
+	conn4    *net.UDPConn
+	conn6    *net.UDPConn
+	stopCh   chan struct{}
+	stopOnce sync.Once
+	wg       sync.WaitGroup
 }
 
 // AnnouncementPacket is the UDP broadcast message for peer discovery.
@@ -62,16 +61,8 @@ func NewLocalDiscovery(store LocalDiscoveryStore, peerMgr LocalDiscoveryPeerMana
 
 // Start launches UDP broadcast discovery on IPv4 and IPv6.
 // Binds to port 49151, starts announcement and receive loops.
-// Returns error if already running or UDP binding fails.
+// Returns error if UDP binding fails.
 func (ld *LocalDiscovery) Start(port int) error {
-	ld.mu.Lock()
-	if ld.running {
-		ld.mu.Unlock()
-		return fmt.Errorf("local discovery already running")
-	}
-	ld.running = true
-	ld.mu.Unlock()
-
 	ld.port = port
 
 	addr4 := &net.UDPAddr{
@@ -80,7 +71,6 @@ func (ld *LocalDiscovery) Start(port int) error {
 	}
 	conn4, err := net.ListenUDP("udp4", addr4)
 	if err != nil {
-		ld.running = false
 		return fmt.Errorf("failed to bind IPv4 UDP: %w", err)
 	}
 
@@ -114,26 +104,20 @@ func (ld *LocalDiscovery) Start(port int) error {
 // Closes UDP connections and stops announcement/receive loops.
 // Safe to call multiple times.
 func (ld *LocalDiscovery) Stop() error {
-	ld.mu.Lock()
-	if !ld.running {
-		ld.mu.Unlock()
-		return nil
-	}
-	ld.running = false
-	ld.mu.Unlock()
+	ld.stopOnce.Do(func() {
+		close(ld.stopCh)
 
-	close(ld.stopCh)
+		if ld.conn4 != nil {
+			_ = ld.conn4.SetReadDeadline(time.Now())
+			_ = ld.conn4.Close()
+		}
+		if ld.conn6 != nil {
+			_ = ld.conn6.SetReadDeadline(time.Now())
+			_ = ld.conn6.Close()
+		}
 
-	if ld.conn4 != nil {
-		_ = ld.conn4.SetReadDeadline(time.Now())
-		_ = ld.conn4.Close()
-	}
-	if ld.conn6 != nil {
-		_ = ld.conn6.SetReadDeadline(time.Now())
-		_ = ld.conn6.Close()
-	}
-
-	ld.wg.Wait()
+		ld.wg.Wait()
+	})
 
 	return nil
 }
@@ -216,13 +200,6 @@ func (ld *LocalDiscovery) receiveLoop() {
 		case <-ld.stopCh:
 			return
 		default:
-		}
-
-		ld.mu.Lock()
-		running := ld.running
-		ld.mu.Unlock()
-		if !running {
-			return
 		}
 
 		ld.readUDPConnection(ld.conn4, buf, ourID, "IPv4")

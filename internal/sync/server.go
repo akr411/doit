@@ -162,7 +162,7 @@ func NewSyncServer(store *storage.Storage, peerMgr *PeerManager) (*SyncServer, e
 	}
 
 	deviceName := GetDeviceName()
-	pairingMgr := NewPairingManager(store.GetDB(), secret)
+	pairingMgr := NewPairingManager(store.GetDB())
 
 	return &SyncServer{
 		store:              store,
@@ -424,7 +424,12 @@ func (ss *SyncServer) handlePair(w http.ResponseWriter, r *http.Request) {
 	}
 
 	certMgr := NewCertificateManager(ss.store.GetDB())
-	ourFingerprint, _ := certMgr.GetFingerprint()
+	ourFingerprint, err := certMgr.GetFingerprint()
+	if err != nil {
+		logging.Error("Failed to get fingerprint during pairing: %v", err)
+		http.Error(w, "Server error: TLS not configured", http.StatusInternalServerError)
+		return
+	}
 
 	response := struct {
 		SharedSecret    string `json:"shared_secret"`

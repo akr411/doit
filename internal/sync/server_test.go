@@ -282,6 +282,11 @@ func TestHandlePairValidCode(t *testing.T) {
 	defer cleanup()
 
 	_ = store.SetConfig("sync_enabled", "true")
+
+	deviceID, _ := GetDeviceID(store.GetDB())
+	certMgr := NewCertificateManager(store.GetDB())
+	_ = certMgr.GenerateSelfSignedCert(deviceID)
+
 	peerMgr := NewPeerManager(store)
 	server, _ := NewSyncServer(store, peerMgr)
 

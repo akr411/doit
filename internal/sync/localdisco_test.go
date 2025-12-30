@@ -88,24 +88,11 @@ func TestLocalDiscoveryStartStop(t *testing.T) {
 		return
 	}
 
-	if !ld.running {
-		t.Error("discovery should be running after Start")
-	}
-
-	err = ld.Start(49152)
-	if err == nil {
-		t.Error("expected error when starting already running discovery")
-	}
-
 	time.Sleep(50 * time.Millisecond)
 
 	err = ld.Stop()
 	if err != nil {
 		t.Errorf("Stop failed: %v", err)
-	}
-
-	if ld.running {
-		t.Error("discovery should not be running after Stop")
 	}
 
 	err = ld.Stop()

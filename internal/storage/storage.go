@@ -80,6 +80,11 @@ func NewWithPath(dbPath string) (*Storage, error) {
 		return nil, fmt.Errorf("failed to create data directory: %w", err)
 	}
 
+	fileExists := false
+	if stat, err := os.Stat(dbPath); err == nil && stat.Size() > 0 {
+		fileExists = true
+	}
+
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
@@ -88,6 +93,28 @@ func NewWithPath(dbPath string) (*Storage, error) {
 	db.SetMaxOpenConns(10)
 	db.SetMaxIdleConns(5)
 	db.SetConnMaxLifetime(0)
+
+	if fileExists {
+		if err := validateDatabase(db); err != nil {
+			_ = db.Close()
+
+			backupPath := fmt.Sprintf("%s.corrupt.%d", dbPath, time.Now().Unix())
+			if renameErr := os.Rename(dbPath, backupPath); renameErr != nil {
+				return nil, fmt.Errorf("database is corrupted and backup failed: %w (original error: %v)", renameErr, err)
+			}
+
+			fmt.Fprintf(os.Stderr, "Warning: Database file was corrupted and has been backed up to:\n  %s\n", backupPath)
+			fmt.Fprintf(os.Stderr, "Creating a new database...\n")
+
+			db, err = sql.Open("sqlite", dbPath)
+			if err != nil {
+				return nil, fmt.Errorf("failed to create new database after corruption: %w", err)
+			}
+			db.SetMaxOpenConns(10)
+			db.SetMaxIdleConns(5)
+			db.SetConnMaxLifetime(0)
+		}
+	}
 
 	if err := enableWAL(db); err != nil {
 		_ = db.Close()
@@ -101,6 +128,15 @@ func NewWithPath(dbPath string) (*Storage, error) {
 	}
 
 	return s, nil
+}
+
+func validateDatabase(db *sql.DB) error {
+	var result string
+	err := db.QueryRow("SELECT name FROM sqlite_master LIMIT 1").Scan(&result)
+	if err != nil && err != sql.ErrNoRows {
+		return fmt.Errorf("database validation failed: %w", err)
+	}
+	return nil
 }
 
 func enableWAL(db *sql.DB) error {

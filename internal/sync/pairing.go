@@ -21,8 +21,7 @@ type PairingCode struct {
 // PairingManager handles pairing code generation and validation.
 // It manages the pairing_codes table and enforces expiration/single-use policies.
 type PairingManager struct {
-	db     *sql.DB
-	secret string
+	db *sql.DB
 }
 
 // querier abstracts database query operations for both *sql.DB and *sql.Tx.
@@ -30,11 +29,10 @@ type querier interface {
 	QueryRow(query string, args ...any) *sql.Row
 }
 
-// NewPairingManager creates a pairing manager for the given database and shared secret.
-func NewPairingManager(db *sql.DB, secret string) *PairingManager {
+// NewPairingManager creates a pairing manager for the given database.
+func NewPairingManager(db *sql.DB) *PairingManager {
 	return &PairingManager{
-		db:     db,
-		secret: secret,
+		db: db,
 	}
 }
 

@@ -173,15 +173,6 @@ func runSyncInit(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to enable sync: %w", err)
 	}
 
-	deviceName := sync.GetDeviceName()
-	port := sync.GetSyncPort(store.GetDB())
-
-	var secret string
-	err := store.GetDB().QueryRow("SELECT value FROM config WHERE key='shared_secret'").Scan(&secret)
-	if err != nil {
-		return fmt.Errorf("failed to get shared secret: %w", err)
-	}
-
 	deviceID, err := sync.GetDeviceID(store.GetDB())
 	if err != nil {
 		return fmt.Errorf("failed to get device ID: %w", err)
@@ -192,16 +183,17 @@ func runSyncInit(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to generate TLS cert: %w", err)
 	}
 
+	deviceName := sync.GetDeviceName()
+	port := sync.GetSyncPort(store.GetDB())
+
 	ui.PrintSuccess("✓ Sync enabled")
 	fmt.Printf("Device: %s\n", deviceName)
 	fmt.Printf("Port: %d (HTTPS), %d (UDP discovery)\n", port, 49151)
 	fmt.Println()
-	fmt.Printf("Shared secret: %s\n", secret)
-	fmt.Println()
-	fmt.Println("On other devices:")
-	fmt.Printf("  1. doit sync init\n")
-	fmt.Printf("  2. sqlite3 ~/.local/share/doit/doit.db \"UPDATE config SET value='%s' WHERE key='shared_secret'\"\n", secret)
-	fmt.Printf("  3. doit sync daemon\n")
+	fmt.Println("Next steps:")
+	fmt.Println("  1. Run 'doit sync show' on this device to generate a pairing code")
+	fmt.Println("  2. Run 'doit sync pair <code>' on other device")
+	fmt.Println("  3. Run 'doit sync daemon' on both devices to start syncing")
 
 	return nil
 }
@@ -305,13 +297,7 @@ func runSyncShow(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("sync not enabled. Run: doit sync init")
 	}
 
-	var secret string
-	err := store.GetDB().QueryRow("SELECT value FROM config WHERE key='shared_secret'").Scan(&secret)
-	if err != nil {
-		return fmt.Errorf("failed to get secret: %w", err)
-	}
-
-	pairingMgr := sync.NewPairingManager(store.GetDB(), secret)
+	pairingMgr := sync.NewPairingManager(store.GetDB())
 	code, err := pairingMgr.GenerateCode()
 	if err != nil {
 		return fmt.Errorf("failed to generate code: %w", err)
@@ -325,7 +311,7 @@ func runSyncShow(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to get fingerprint: %w", err)
 	}
 
-	shortFingerprint := formatFingerprint(fingerprint[:32])
+	formattedFingerprint := formatFingerprint(fingerprint)
 
 	fmt.Println()
 	fmt.Printf("═══════════════════════════════════════════════════\n")
@@ -337,8 +323,9 @@ func runSyncShow(cmd *cobra.Command, args []string) error {
 	expiresIn := time.Until(time.Unix(0, code.ExpiresAt))
 	fmt.Printf("  Expires: %dm %ds\n", int(expiresIn.Minutes()), int(expiresIn.Seconds())%60)
 	fmt.Println()
-	ui.PrintWarning("  SECURITY: Verify this fingerprint on pairing device:")
-	fmt.Printf("  Fingerprint: %s\n", shortFingerprint)
+	ui.PrintWarning("  SECURITY: Verify this FULL fingerprint on pairing device:")
+	fmt.Printf("  Certificate SHA256 Fingerprint:\n")
+	fmt.Printf("  %s\n", formattedFingerprint)
 	fmt.Println()
 	fmt.Printf("On other device run:\n")
 	fmt.Printf("  $ doit sync pair %s\n", code.Code)
@@ -385,7 +372,11 @@ func runSyncPair(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("no devices discovered. Ensure both devices are on same network")
 	}
 
-	deviceID, _ := sync.GetDeviceID(store.GetDB())
+	deviceID, err := sync.GetDeviceID(store.GetDB())
+	if err != nil {
+		return fmt.Errorf("failed to get device ID: %w", err)
+	}
+
 	deviceName := sync.GetDeviceName()
 
 	certMgr := sync.NewCertificateManager(store.GetDB())
@@ -431,7 +422,11 @@ func pairWithPeer(peer *storage.Peer, code, deviceID, deviceName, ourFingerprint
 		"cert_fingerprint": ourFingerprint,
 	}
 
-	body, _ := json.Marshal(reqData)
+	body, err := json.Marshal(reqData)
+	if err != nil {
+		return fmt.Errorf("failed to marshal pairing request: %w", err)
+	}
+
 	url := fmt.Sprintf("https://%s/sync/pair", peer.Address)
 
 	resp, err := client.Post(url, "application/json", bytes.NewReader(body))
@@ -459,25 +454,27 @@ func pairWithPeer(peer *storage.Peer, code, deviceID, deviceName, ourFingerprint
 		return fmt.Errorf("failed to parse response: %w", err)
 	}
 
-	if pairResp.CertFingerprint != "" && resp.TLS != nil && len(resp.TLS.PeerCertificates) > 0 {
-		tlsFingerprint := sync.ComputeCertFingerprint(resp.TLS.PeerCertificates[0])
-		if tlsFingerprint != pairResp.CertFingerprint {
-			return fmt.Errorf("certificate fingerprint mismatch (possible MITM attack)")
-		}
+	if resp.TLS == nil || len(resp.TLS.PeerCertificates) == 0 {
+		return fmt.Errorf("TLS connection did not provide peer certificate")
 	}
 
-	if pairResp.CertFingerprint == "" {
-		return fmt.Errorf("peer did not provide certificate fingerprint")
+	tlsFingerprint := sync.ComputeCertFingerprint(resp.TLS.PeerCertificates[0])
+
+	if pairResp.CertFingerprint != "" && tlsFingerprint != pairResp.CertFingerprint {
+		ui.PrintWarning("WARNING: Certificate fingerprint mismatch detected!")
+		ui.PrintWarning("TLS cert fingerprint: %s", tlsFingerprint[:32])
+		ui.PrintWarning("JSON fingerprint:     %s", pairResp.CertFingerprint[:32])
+		ui.PrintWarning("This may indicate tampering with the response.")
 	}
 
-	shortFingerprint := formatFingerprint(pairResp.CertFingerprint[:32])
+	formattedFingerprint := formatFingerprint(tlsFingerprint)
 	fmt.Println()
 	ui.PrintWarning("SECURITY VERIFICATION REQUIRED")
-	fmt.Printf("Peer fingerprint from %s:\n", pairResp.DeviceName)
-	fmt.Printf("  %s\n", shortFingerprint)
+	fmt.Printf("Peer certificate fingerprint from %s:\n", pairResp.DeviceName)
+	fmt.Printf("  %s\n", formattedFingerprint)
 	fmt.Println()
-	fmt.Println("Compare this with the fingerprint shown on the other device.")
-	fmt.Println("If they match, the connection is secure.")
+	fmt.Println("Compare this EXACT fingerprint with the one shown on the other device.")
+	fmt.Println("If they match, the connection is secure. If not, DO NOT proceed.")
 	fmt.Println()
 
 	confirmed, err := ui.Confirm("Does this fingerprint match the other device?")
@@ -494,7 +491,7 @@ func pairWithPeer(peer *storage.Peer, code, deviceID, deviceName, ourFingerprint
 		return fmt.Errorf("failed to save secret: %w", err)
 	}
 
-	if err := certMgr.SavePeerCertificate(peer.ID, pairResp.CertFingerprint); err != nil {
+	if err := certMgr.SavePeerCertificate(peer.ID, tlsFingerprint); err != nil {
 		return fmt.Errorf("failed to save cert: %w", err)
 	}
 

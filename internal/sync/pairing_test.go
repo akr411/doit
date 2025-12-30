@@ -37,7 +37,7 @@ func TestGenerateCode(t *testing.T) {
 	db := setupPairingTestDB(t)
 	defer func() { _ = db.Close() }()
 
-	pm := NewPairingManager(db, "test-secret")
+	pm := NewPairingManager(db)
 
 	code, err := pm.GenerateCode()
 	if err != nil {
@@ -133,7 +133,7 @@ func TestValidateCodeTable(t *testing.T) {
 			db := setupPairingTestDB(t)
 			defer func() { _ = db.Close() }()
 
-			pm := NewPairingManager(db, "test-secret")
+			pm := NewPairingManager(db)
 
 			code := tt.code
 			if tt.setup != nil {
@@ -158,7 +158,7 @@ func TestConsumedCodeBecomesInvalid(t *testing.T) {
 	db := setupPairingTestDB(t)
 	defer func() { _ = db.Close() }()
 
-	pm := NewPairingManager(db, "test-secret")
+	pm := NewPairingManager(db)
 
 	code, err := pm.GenerateCode()
 	if err != nil {
@@ -183,7 +183,7 @@ func TestCleanupExpired(t *testing.T) {
 	db := setupPairingTestDB(t)
 	defer func() { _ = db.Close() }()
 
-	pm := NewPairingManager(db, "test-secret")
+	pm := NewPairingManager(db)
 
 	expired := time.Now().UnixNano() - 30*time.Minute.Nanoseconds()
 	_, _ = db.Exec(`
@@ -281,7 +281,7 @@ func TestValidateAndConsumeCode(t *testing.T) {
 			db := setupPairingTestDB(t)
 			defer func() { _ = db.Close() }()
 
-			pm := NewPairingManager(db, "test-secret")
+			pm := NewPairingManager(db)
 
 			code := tt.setup(t, pm)
 
@@ -369,7 +369,7 @@ func TestValidateAndConsumeCodeAtomicity(t *testing.T) {
 	db := setupPairingTestDB(t)
 	defer func() { _ = db.Close() }()
 
-	pm := NewPairingManager(db, "test-secret")
+	pm := NewPairingManager(db)
 
 	code, err := pm.GenerateCode()
 	if err != nil {

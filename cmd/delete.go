@@ -30,8 +30,11 @@ var deleteCmd = &cobra.Command{
 			}
 			if !deleteYes {
 				confirmed, err := ui.Confirm(fmt.Sprintf("Delete ALL %d todo(s)? This cannot be undone!", len(todos)))
-				if err != nil || !confirmed {
+				if err != nil {
 					return err
+				}
+				if !confirmed {
+					return nil
 				}
 			}
 			for _, t := range todos {
@@ -60,8 +63,11 @@ var deleteCmd = &cobra.Command{
 			}
 			if !deleteYes {
 				confirmed, err := ui.Confirm(fmt.Sprintf("Delete %d completed todo(s)?", len(completedTodos)))
-				if err != nil || !confirmed {
+				if err != nil {
 					return err
+				}
+				if !confirmed {
+					return nil
 				}
 			}
 			for _, t := range completedTodos {
@@ -95,8 +101,11 @@ var deleteCmd = &cobra.Command{
 			}
 
 			confirmed, err := ui.Confirm(fmt.Sprintf("Delete %d todo(s)?", len(indices)))
-			if err != nil || !confirmed {
+			if err != nil {
 				return err
+			}
+			if !confirmed {
+				return nil
 			}
 
 			for _, idx := range indices {
@@ -121,8 +130,11 @@ var deleteCmd = &cobra.Command{
 				message = fmt.Sprintf("Delete %d todo(s)?", len(args))
 			}
 			confirmed, err := ui.Confirm(message)
-			if err != nil || !confirmed {
+			if err != nil {
 				return err
+			}
+			if !confirmed {
+				return nil
 			}
 		}
 

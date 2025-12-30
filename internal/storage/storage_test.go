@@ -192,3 +192,61 @@ func TestConfig(t *testing.T) {
 		t.Errorf("expected 'updated_value', got %q", value)
 	}
 }
+
+func TestCorruptionRecovery(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+
+	s, err := NewWithPath(dbPath)
+	if err != nil {
+		t.Fatalf("failed to create storage: %v", err)
+	}
+
+	todo := models.NewTodo("Test task", "", 0)
+	if err := s.SaveTodo(todo); err != nil {
+		t.Fatalf("failed to save todo: %v", err)
+	}
+
+	if err := s.Close(); err != nil {
+		t.Fatalf("failed to close database: %v", err)
+	}
+
+	if err := os.WriteFile(dbPath, []byte("this is not a valid sqlite database"), 0644); err != nil {
+		t.Fatalf("failed to corrupt database: %v", err)
+	}
+
+	s2, err := NewWithPath(dbPath)
+	if err != nil {
+		t.Fatalf("failed to recover from corruption: %v", err)
+	}
+	defer s2.Close()
+
+	backupFiles, err := filepath.Glob(dbPath + ".corrupt.*")
+	if err != nil {
+		t.Fatalf("failed to check for backup files: %v", err)
+	}
+	if len(backupFiles) != 1 {
+		t.Errorf("expected 1 backup file, found %d", len(backupFiles))
+	}
+
+	todos, err := s2.GetAllTodos()
+	if err != nil {
+		t.Fatalf("failed to get todos from new database: %v", err)
+	}
+	if len(todos) != 0 {
+		t.Logf("new database should be empty (old data was in corrupted backup)")
+	}
+
+	newTodo := models.NewTodo("New task after recovery", "", 0)
+	if err := s2.SaveTodo(newTodo); err != nil {
+		t.Fatalf("failed to save todo in recovered database: %v", err)
+	}
+
+	retrieved, err := s2.GetTodo(newTodo.ID)
+	if err != nil {
+		t.Fatalf("failed to retrieve todo from recovered database: %v", err)
+	}
+	if retrieved.Task != "New task after recovery" {
+		t.Errorf("expected 'New task after recovery', got %q", retrieved.Task)
+	}
+}

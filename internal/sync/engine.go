@@ -3,6 +3,7 @@ package sync
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/akr411/doit/internal/logging"
@@ -21,8 +22,7 @@ type SyncEngine struct {
 	client    *SyncClient
 	peerMgr   *PeerManager
 	stopCh    chan struct{}
-	mu        sync.RWMutex
-	running   bool
+	running   atomic.Bool
 	syncSem   chan struct{}
 	syncWg    sync.WaitGroup
 }
@@ -60,13 +60,9 @@ func NewSyncEngine(store *storage.Storage) (*SyncEngine, error) {
 // It loads active peers, starts the HTTPS server, begins UDP discovery, and runs
 // the background sync loop. Returns error if already running or if any component fails to start.
 func (se *SyncEngine) Start() error {
-	se.mu.Lock()
-	if se.running {
-		se.mu.Unlock()
+	if !se.running.CompareAndSwap(false, true) {
 		return fmt.Errorf("sync engine already running")
 	}
-	se.running = true
-	se.mu.Unlock()
 
 	if err := se.peerMgr.LoadActivePeers(); err != nil {
 		logging.Warn("Failed to load active peers: %v", err)
@@ -75,14 +71,14 @@ func (se *SyncEngine) Start() error {
 	port := GetSyncPort(se.store.GetDB())
 
 	if err := se.server.Start(port); err != nil {
-		se.running = false
+		se.running.Store(false)
 		return fmt.Errorf("failed to start server: %w", err)
 	}
 
 	actualPort := se.server.GetPort()
 	if err := se.discovery.Start(actualPort); err != nil {
 		_ = se.server.Stop()
-		se.running = false
+		se.running.Store(false)
 		return fmt.Errorf("failed to start discovery: %w", err)
 	}
 
@@ -95,14 +91,11 @@ func (se *SyncEngine) Start() error {
 // Stops the sync loop, waits for active syncs, then stops discovery and server.
 // Safe to call multiple times - no-op if not running.
 func (se *SyncEngine) Stop() error {
-	se.mu.Lock()
-	if !se.running {
-		se.mu.Unlock()
+	if !se.running.CompareAndSwap(true, false) {
 		return nil
 	}
-	se.running = false
+
 	close(se.stopCh)
-	se.mu.Unlock()
 
 	se.syncWg.Wait()
 
@@ -118,11 +111,9 @@ func (se *SyncEngine) Stop() error {
 }
 
 // IsRunning returns true if the sync engine is currently running.
-// Thread-safe check using read lock.
+// Thread-safe atomic check.
 func (se *SyncEngine) IsRunning() bool {
-	se.mu.RLock()
-	defer se.mu.RUnlock()
-	return se.running
+	return se.running.Load()
 }
 
 func (se *SyncEngine) syncLoop() {

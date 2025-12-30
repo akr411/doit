@@ -22,6 +22,9 @@ var rootCmd = &cobra.Command{
   doit list --json`,
 	SilenceErrors: true,
 	SilenceUsage:  false,
+	CompletionOptions: cobra.CompletionOptions{
+		DisableDefaultCmd: true,
+	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if isTTY {
 			return runInteractive()

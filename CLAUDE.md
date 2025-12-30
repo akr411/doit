@@ -1,6 +1,6 @@
 # doit - Personal Todo CLI with P2P Sync
 
-No servers, works offline, syncs automatically.
+No cloud servers, P2P sync via local daemon. Works offline, syncs automatically on LAN.
 
 ---
 
